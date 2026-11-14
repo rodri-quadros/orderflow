@@ -1,10 +1,10 @@
 # Checklist de requisitos — Trabalho A2
 
 Mapeia cada requisito e cada pergunta obrigatória de [enunciado-a2.md](enunciado-a2.md) para a seção do
-[README](../README.md) que o atende e para a evidência no repositório. Status: **atendido** ou **pendente**
-(11 = apresentação/vídeo, commit e entrega).
+[README](../README.md) que o atende e para a evidência no repositório. Status: **atendido**, ou **preparado** no
+caso do vídeo, que é gravado pelo grupo.
 
-Atualizado na Etapa 10.
+Atualizado na Etapa 11.
 
 ## Seção 2 — Características gerais da aplicação
 
@@ -91,7 +91,7 @@ Atualizado na Etapa 10.
 | 7.2 README: 6. Discussão | 6 | — | atendido |
 | 7.2 README: 7. Conclusão | 7 | — | atendido |
 | 7.2 Gráficos, tabelas, trechos de código e evidências | 3 a 5 | `scripts/conferir_numeros.py` confere os números das tabelas | atendido |
-| 7.3 Apresentação / vídeo de até 7 min | — | coleção Postman e scripts prontos para a demonstração | **pendente Etapa 11** |
+| 7.3 Apresentação / vídeo de até 7 min | 8 | `scripts/demo-video.sh` (cache, N+1, índices e k6 ao vivo), coleção Postman; roteiro e telas fora do repositório | preparado (gravação pelo grupo) |
 
 ## Seção 9 — Pergunta central
 

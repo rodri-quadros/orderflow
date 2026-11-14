@@ -494,8 +494,8 @@ select p1_0.id, p1_0.data_pedido, p1_0.status, p1_0.valor_total
 from pedido p1_0 where p1_0.cliente_id=? order by p1_0.data_pedido desc fetch first ? rows only
 ```
 
-Ela combina filtro, ordenação e limite; o PostgreSQL não indexa chaves estrangeiras automaticamente. Também foram
-analisadas a consulta do enunciado (sem limite) e a do slide (com intervalo de datas).
+Ela combina filtro, ordenação e limite. O "antes" existe porque o PostgreSQL não indexa chaves estrangeiras
+automaticamente. Também foram analisadas a consulta do enunciado (sem limite) e a do slide (com intervalo de datas).
 
 **Índice composto:**
 
@@ -539,7 +539,8 @@ Limit  (actual time=0.090..0.217 rows=20 loops=1)
 **Observado, não presumido.** Com o composto disponível, o planejador preferiu Bitmap Heap Scan + Sort em três
 casos: o cliente 545 (com 9 linhas, o `LIMIT 20` não corta nada), a consulta sem limite (ler 225 linhas em 201
 páginas na ordem física e ordenar custou 484,66 no plano, contra 707,79 do Index Scan) e a consulta com intervalo
-(que entrou no `Index Cond`, sem nenhuma linha removida por filtro). O índice foi usado em todos; mudou a forma.
+(o intervalo de datas entrou no `Index Cond`, e nenhuma linha foi removida por filtro). O índice foi usado nos três;
+mudou a forma de usá-lo.
 
 **Custos** (inserção de 10.000 pedidos em `BEGIN ... ROLLBACK`, mediana de 5; [indice.txt](resultados/indice/indice.txt)):
 
@@ -588,11 +589,11 @@ Sob carga, o throughput subiu de 6,7 a 7,0 vezes, e cada transação passou a le
 A **seletividade** (225 linhas usaram Index Scan; 9 linhas, Bitmap); o **`LIMIT`**, que deixa o Index Scan parar
 cedo; a **dispersão física** das linhas (225 pedidos em 201 páginas), que favorece o bitmap quando é preciso ler
 tudo; a **ordem das colunas** (o índice simples manteve o Sort); e o **tamanho da tabela**: os 7 MB cabem na
-memória do PostgreSQL, todo acesso foi `hit`. Em disco, a diferença seria maior.
+memória do PostgreSQL, por isso todo acesso foi `hit`. Em disco, a diferença seria maior.
 
 **4. Quais podem ser os custos de manter índices adicionais?**
-Espaço (3,1 MB, 43% da tabela), escrita (+33% de WAL por inserção, e o mesmo em UPDATEs dessas colunas e em
-DELETEs), manutenção (VACUUM, inchaço) e mais planos para o planejador avaliar.
+Espaço (3,1 MB, 43% da tabela), escrita (+33% de WAL por inserção, com custo semelhante em UPDATEs dessas colunas
+e em DELETEs), manutenção (VACUUM, inchaço) e mais planos para o planejador avaliar.
 
 **5. Criar índices em todas as colunas consultadas seria uma boa estratégia? Por quê?**
 Não. É a armadilha do algoritmo guloso: cada índice é um ótimo local para uma leitura, mas toda escrita paga por
@@ -829,28 +830,51 @@ consulta isolada e pioram o sistema como um todo.
 **Pré-requisitos:** Java 21 e Docker com Compose v2; para os experimentos, `psql`, `jq`, k6 e Python 3. O Maven não
 precisa estar instalado (`./mvnw`).
 
+**1. Ambiente e dados** (na primeira subida, a carga leva cerca de 9 s depois que os containers sobem):
+
 ```bash
-cp .env.example .env              # troque todas as senhas "troque-esta-senha"
+cp .env.example .env              # troque as três senhas "troque-esta-senha"
 docker compose up -d              # PostgreSQL (127.0.0.1:5433) e Redis (127.0.0.1:6379)
-docker compose ps                 # aguarde os dois ficarem "healthy"
-./mvnw spring-boot:run            # API em http://127.0.0.1:8080
-curl -s localhost:8080/actuator/health
-./mvnw clean verify               # 87 testes (1 pulado), cerca de 17 s; precisa do Compose no ar
+docker compose logs -f postgres   # aguarde "PostgreSQL init process complete" e saia com Ctrl+C
 ```
 
-**Experimentos** (gravam em `resultados/` e deixam a base no estado original):
+O status "healthy" do `docker compose ps` aparece antes do fim da carga, por isso o sinal é a linha do log. Para
+conferir os dados (o checksum deve ser `100000 | 1545590410.75`, igual ao de
+[resultados/volume-dados.txt](resultados/volume-dados.txt)):
+
+```bash
+set -a; . ./.env; set +a
+PGPASSWORD=$APP_DB_PASSWORD psql -h 127.0.0.1 -p $POSTGRES_PORT -U $APP_DB_USER -d $POSTGRES_DB \
+  -f db/validacao_dados.sql | grep -A3 Checksum
+```
+
+**2. Testes** (precisam só do Compose no ar):
+
+```bash
+./mvnw clean verify               # 87 testes (1 pulado), cerca de 17 s
+```
+
+**3. API** (ocupa o terminal; use outro para as requisições):
+
+```bash
+./mvnw spring-boot:run            # API em http://127.0.0.1:8080
+curl -s localhost:8080/actuator/health        # "status":"UP", com db e redis UP
+```
+
+**Experimentos e demonstração** (todos deixam a base no estado original):
 
 | Script | O que faz | Duração | Saída |
 |---|---|---|---|
-| `scripts/experimento-cache.sh` | experimento obrigatório e comparação com 1 usuário (API no ar com `CACHE_TTL_PRODUTOS=10s SQL_LOG_LEVEL=info`) | cerca de 1 min | `resultados/cache/` |
+| `scripts/experimento-cache.sh` | experimento obrigatório e comparação com 1 usuário; usa a API da porta 8080, iniciada com `CACHE_TTL_PRODUTOS=10s SQL_LOG_LEVEL=info ./mvnw spring-boot:run` | cerca de 30 s | `resultados/cache/` |
 | `scripts/experimento-persistencia.sh` | LAZY, EAGER, JOIN FETCH e nativa com 10, 100 e 1000 pedidos; SQLs gerados | cerca de 1 min | `resultados/persistencia/` |
 | `scripts/experimento-indice.sh` | sem → simples → composto → sem: planos, tempos, custos | cerca de 2 min | `resultados/indice/`, `resultados/explain/` |
 | `scripts/verificacao-estabilidade.sh` | 50 requisições simultâneas por endpoint do k6, antes da carga | menos de 1 min | `resultados/verificacao-estabilidade.txt` |
 | `scripts/rodar-cenarios.sh cache` (ou `persistencia`, `indice`, `todos`) | testes de carga com k6 | 50, 44 e 21 min | `resultados/carga/<cenário>/` |
 | `scripts/rodar-cenarios.sh checagem` | HIT × partida a frio intercalados, 100 VUs | cerca de 7 min | `resultados/carga/checagem-frio-hit/` |
+| `scripts/demo-video.sh` | demonstração ao vivo (cache, N+1, índices, k6 de 15 s), com pausas; usa a API da 8080 e deixa o estado limpo | cerca de 45 s sem as pausas | só no terminal |
 
-Os scripts que medem sobem a própria API na porta 18080 (`PORTA_EXPERIMENTO`). O de carga aceita `NIVEIS`,
-`DURACAO`, `AQUECIMENTO` e `REPETICOES`. Tabelas e gráficos:
+Os demais scripts (exceto o de demonstração) sobem a própria API na porta 18080 (`PORTA_EXPERIMENTO`), sem
+interferir na da 8080. O de carga aceita `NIVEIS`, `DURACAO`, `AQUECIMENTO` e `REPETICOES`. Tabelas e gráficos:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements.txt
@@ -866,8 +890,9 @@ PGPASSWORD=$POSTGRES_ADMIN_PASSWORD psql -h 127.0.0.1 -p $POSTGRES_PORT -U $POST
 ```
 
 **Recriar a base do zero:** `docker compose down -v && docker compose up -d`. Os scripts de `db/init/` rodam de
-novo e geram dados idênticos; para conferir, `db/validacao_dados.sql` (saída esperada em
-[resultados/volume-dados.txt](resultados/volume-dados.txt)).
+novo e geram dados idênticos (confira com o comando do passo 1). O Compose usa o nome de projeto fixo
+`trabalho-a2`: para subir uma segunda cópia do repositório sem tocar no volume da primeira, defina antes
+`COMPOSE_PROJECT_NAME` com outro nome.
 
 ## 9. Estrutura do repositório
 
@@ -877,7 +902,7 @@ src/test/java/br/uva/pedidos/   87 testes funcionais (unitários e de integraç�
 db/init/                        usuário da aplicação, schema e carga dos dados (executados pelo Compose)
 db/indice/                      criar e remover índices; consultas com EXPLAIN ANALYZE
 k6/                             cenários de carga e configuração comum
-scripts/                        experimentos, orquestrador do k6 e geração de gráficos
+scripts/                        experimentos, orquestrador do k6, gráficos, conferência de números e demonstração
 resultados/                     saídas brutas de todos os experimentos (evidências)
 resultados/carga/               132 rodadas do k6, resumo.md, resumo.csv, ambiente.txt e a checagem frio × HIT
 resultados/graficos/            gráficos gerados por scripts/gerar_graficos.py

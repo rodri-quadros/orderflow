@@ -180,6 +180,21 @@ Decisões da Etapa 4:
 - Ao mudar números: copiar de `resultados/` (nunca digitar), regenerar com `gerar_graficos.py` e rodar o conferidor.
 - Mermaid do README revisado à mão (renderizar com `mermaid-cli` exigiria baixar pacote e rodar o Chrome).
 
+## Entrega e vídeo (Etapa 11)
+- Remoto: `origin` (branch `main`, ver `git remote -v`). Não reescrever histórico já publicado.
+- `apresentacao/` (ignorada pelo git): `abertura.html`, `encerramento.html` (palco 1920×1080 escalado) e
+  `roteiro-video.md`. Nomes e matrículas só lá.
+- `scripts/demo-video.sh`: demonstração com pausas (cache, N+1, índices, k6 50 VUs × 15 s); usa a API da 8080,
+  reverte o PUT (inclusive por `trap`), termina sem índice, Redis vazio. ~45 s sem as pausas
+  (testar com `yes '' | scripts/demo-video.sh`).
+- `./mvnw spring-boot:run` roda com `-XX:TieredStopAtLevel=1` (só C1): para números sob carga, usar o jar
+  (`java -jar target/trabalho-a2-0.0.1-SNAPSHOT.jar`); no teste, k6 com índice: 3.422 (run) × 5.586 req/s (jar).
+- Reprodução do zero (clone + `.env` novo) funcionou. Achados corrigidos no README, seção 8: "healthy" aparece antes
+  do fim do `03_dados.sql` (esperar "PostgreSQL init process complete" no log); faltava o comando do checksum;
+  `spring-boot:run` ocupa o terminal (verify antes da API). O nome de projeto do Compose é fixo (`trabalho-a2`):
+  para uma segunda cópia, `COMPOSE_PROJECT_NAME=<outro>` antes de qualquer `docker compose` (senão o `down -v`
+  da cópia apaga o volume original).
+
 ## Divergências deliberadas em relação às aulas
 - Aula: `buscarProduto` é o método com `@Cacheable` e `invalidarCache(id)` é um método separado com `@CacheEvict`.
   Aqui: `buscarProduto` = sem cache (A), `buscarProdutoComCache` = com cache (B), e o `@CacheEvict` fica no próprio
