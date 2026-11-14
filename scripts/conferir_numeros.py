@@ -4,7 +4,7 @@ Uso: python3 scripts/conferir_numeros.py [--prosa] [README.md ...]   (--prosa co
 Os números do README estão no formato brasileiro (1.234,56). Um número confere quando algum valor dos
 arquivos de origem, arredondado para as mesmas casas decimais, é igual a ele. Razões ("2,4×") e
 percentuais derivados são listados à parte para conferência (são calculados a partir de dois valores de
-origem); números de versão (4.1.2) e códigos HTTP são ignorados.
+origem); números de versão (4.1.2), códigos HTTP e portas são ignorados.
 Termina com código 1 se algum número não conferir.
 """
 import re
@@ -15,7 +15,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 FONTES = [p for p in (RAIZ / "resultados").rglob("*")
           if p.suffix in {".txt", ".csv", ".md"} and "_amostras" not in p.name]
 
-CODIGOS_HTTP = {"200", "201", "400", "404", "409", "422", "500"}
+CODIGOS_HTTP = {"200", "201", "400", "404", "409", "422", "500", "8080", "18080"}   # e portas
 NUMERO = re.compile(r"(?<![\w.])\d[\d.,]*\d|(?<![\w.,])\d(?![\w])")
 
 
