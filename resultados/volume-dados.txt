@@ -1,0 +1,89 @@
+== Contagem por tabela
+      tabela      | linhas 
+------------------+--------
+ produto (ativos) |    901
+ produto          |   1000
+ cliente          |  10000
+ pedido           | 100000
+ item_pedido      | 299702
+(5 linhas)
+
+== Itens por pedido
+ minimo | media | maximo 
+--------+-------+--------
+      1 |  3.00 |      5
+(1 linha)
+
+== Pedidos por cliente (inclui clientes sem pedido)
+ minimo | media | mediana | maximo 
+--------+-------+---------+--------
+      0 | 10.00 |       9 |    225
+(1 linha)
+
+== Clientes por faixa de quantidade de pedidos
+ faixa | clientes 
+-------+----------
+ 0     |        2
+ 1-5   |     1529
+ 6-10  |     5029
+ 11-20 |     3018
+ 21-50 |      396
+ 51+   |       26
+(6 linhas)
+
+== 5 clientes com mais pedidos (candidatos para o experimento de índices)
+ cliente_id | pedidos 
+------------+---------
+          1 |     225
+          2 |     122
+          4 |     106
+          3 |      97
+          5 |      85
+(5 linhas)
+
+== Cliente típico (quantidade de pedidos igual à mediana)
+ cliente_id | pedidos 
+------------+---------
+        545 |       9
+(1 linha)
+
+== Integridade (todas as colunas devem ser 0)
+ pedidos_sem_itens | itens_orfaos | itens_produto_inativo | total_divergente 
+-------------------+--------------+-----------------------+------------------
+                 0 |            0 |                     0 |                0
+(1 linha)
+
+== Distribuição de status
+  status   | pedidos | percentual 
+-----------+---------+------------
+ APROVADO  |   59660 |      59.66
+ PENDENTE  |   25128 |      25.13
+ CANCELADO |   15212 |      15.21
+(3 linhas)
+
+== Checksum de reprodutibilidade
+ pedidos | soma_valor_total | soma_cliente_id |      primeiro       |       ultimo        
+---------+------------------+-----------------+---------------------+---------------------
+  100000 |    1545590410.75 |       402425665 | 2024-11-01 00:07:57 | 2026-10-31 23:33:08
+(1 linha)
+
+== Tamanho das tabelas
+   tabela    |  dados  | indices |  total  
+-------------+---------+---------+---------
+ item_pedido | 20 MB   | 11 MB   | 30 MB
+ pedido      | 7264 kB | 2208 kB | 9472 kB
+ cliente     | 1024 kB | 920 kB  | 1944 kB
+ produto     | 160 kB  | 40 kB   | 200 kB
+(4 linhas)
+
+== Índices existentes
+   tabela    |         indice         | tamanho |                                     definicao                                     
+-------------+------------------------+---------+-----------------------------------------------------------------------------------
+ cliente     | cliente_email_key      | 680 kB  | CREATE UNIQUE INDEX cliente_email_key ON public.cliente USING btree (email)
+ cliente     | cliente_pkey           | 240 kB  | CREATE UNIQUE INDEX cliente_pkey ON public.cliente USING btree (id)
+ item_pedido | idx_item_pedido_pedido | 4328 kB | CREATE INDEX idx_item_pedido_pedido ON public.item_pedido USING btree (pedido_id)
+ item_pedido | item_pedido_pkey       | 6592 kB | CREATE UNIQUE INDEX item_pedido_pkey ON public.item_pedido USING btree (id)
+ pedido      | pedido_pkey            | 2208 kB | CREATE UNIQUE INDEX pedido_pkey ON public.pedido USING btree (id)
+ produto     | produto_pkey           | 40 kB   | CREATE UNIQUE INDEX produto_pkey ON public.produto USING btree (id)
+(6 linhas)
+

@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: trabalho-a2
+  # Mesmo .env usado pelo Docker Compose; nenhuma credencial fica neste arquivo.
+  config:
+    import: optional:file:.env[.properties]
+
+  datasource:
+    url: jdbc:postgresql://localhost:${POSTGRES_PORT}/${POSTGRES_DB}
+    # Usuário de aplicação sem DDL; o admin só é usado pelos scripts SQL.
+    username: ${APP_DB_USER}
+    password: ${APP_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      # Timeout curto: com o pool saturado nos testes de carga, a espera vira erro mensurável.
+      connection-timeout: 5000
+      data-source-properties:
+        options: "-c statement_timeout=10000"
+
+  jpa:
+    # Sem OSIV o LAZY não é inicializado durante a serialização JSON, então o N+1 aparece onde ocorre.
+    open-in-view: false
+    hibernate:
+      # O schema vem de db/init/02_schema.sql; o Hibernate apenas confere o mapeamento.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+        # default_batch_fetch_size fica de fora de propósito: esconderia o N+1.
+
+  data:
+    redis:
+      host: localhost
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+      timeout: 2s
+
+server:
+  address: 127.0.0.1
+  port: 8080
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      # Seguro porque a API escuta apenas em 127.0.0.1.
+      show-details: always
+
+logging:
+  level:
+    # debug nos experimentos de consulta; info nos testes de carga (log de SQL distorce a medição).
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:info}
