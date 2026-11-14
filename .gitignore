@@ -37,3 +37,6 @@ Thumbs.db
 # Ambiente virtual Python (scripts/gerar_graficos.py)
 .venv/
 __pycache__/
+
+# Material do vídeo (contém os nomes do grupo; não vai para o repositório)
+apresentacao/
