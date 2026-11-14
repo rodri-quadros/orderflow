@@ -1,0 +1,31 @@
+# GET /api/experimentos/pedidos/eager/1
+# X-SQL-Count: 1
+
+-- SQL 1
+    select
+        pe1_0.id,
+        pe1_0.cliente_id,
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone,
+        pe1_0.data_pedido,
+        pe1_0.status,
+        pe1_0.valor_total,
+        i1_0.pedido_id,
+        i1_0.id,
+        i1_0.preco_unitario,
+        i1_0.produto_id,
+        i1_0.quantidade 
+    from
+        pedido pe1_0 
+    join
+        cliente c1_0 
+            on c1_0.id=pe1_0.cliente_id 
+    left join
+        item_pedido i1_0 
+            on pe1_0.id=i1_0.pedido_id 
+    where
+        pe1_0.id=?
+    -- binding parameter (1:BIGINT) <- [1]

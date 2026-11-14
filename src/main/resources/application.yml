@@ -26,8 +26,11 @@ spring:
     properties:
       hibernate:
         format_sql: true
-        jdbc:
-          time_zone: UTC
+        session_factory:
+          statement_inspector: br.uva.pedidos.config.ContadorSql
+        # Sem hibernate.jdbc.time_zone: as colunas são TIMESTAMP sem fuso e as entidades usam
+        # LocalDateTime, então o valor deve ir e voltar sem conversão. Com time_zone=UTC o
+        # Hibernate deslocava as datas pelo fuso da JVM (-3h), e a API divergia do psql.
         # default_batch_fetch_size fica de fora de propósito: esconderia o N+1.
 
   data:
@@ -35,7 +38,10 @@ spring:
       host: localhost
       port: ${REDIS_PORT}
       password: ${REDIS_PASSWORD}
-      timeout: 2s
+      # Redis local responde em < 1 ms; 500 ms tolera pausas de GC e ainda limita o custo de cada
+      # requisição quando o Redis cai (o CacheErrorHandler desvia para o banco).
+      timeout: 500ms
+      connect-timeout: 500ms
 
 server:
   address: 127.0.0.1

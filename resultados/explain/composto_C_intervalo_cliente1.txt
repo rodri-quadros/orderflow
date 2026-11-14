@@ -1,0 +1,17 @@
+-- estado: composto | índices em pedido: idx_pedido_cliente_data,pedido_pkey
+-- consulta: C_intervalo | cliente: 1 | após 3 execuções de aquecimento
+Sort  (cost=252.30..252.50 rows=81 width=41) (actual time=0.518..0.523 rows=100 loops=1)
+  Sort Key: data_pedido DESC
+  Sort Method: quicksort  Memory: 30kB
+  Buffers: shared hit=105
+  ->  Bitmap Heap Scan on pedido  (cost=5.25..249.73 rows=81 width=41) (actual time=0.065..0.463 rows=100 loops=1)
+        Recheck Cond: ((cliente_id = 1) AND (data_pedido >= '2026-01-01 00:00:00'::timestamp without time zone))
+        Heap Blocks: exact=96
+        Buffers: shared hit=102
+        ->  Bitmap Index Scan on idx_pedido_cliente_data  (cost=0.00..5.23 rows=81 width=0) (actual time=0.040..0.041 rows=100 loops=1)
+              Index Cond: ((cliente_id = 1) AND (data_pedido >= '2026-01-01 00:00:00'::timestamp without time zone))
+              Buffers: shared hit=6
+Planning:
+  Buffers: shared hit=123
+Planning Time: 0.821 ms
+Execution Time: 0.614 ms

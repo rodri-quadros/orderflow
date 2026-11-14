@@ -1,0 +1,17 @@
+-- estado: composto | índices em pedido: idx_pedido_cliente_data,pedido_pkey
+-- consulta: B_sem_limite | cliente: 545 | após 3 execuções de aquecimento
+Sort  (cost=41.63..41.66 rows=10 width=41) (actual time=0.127..0.128 rows=9 loops=1)
+  Sort Key: data_pedido DESC
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=18
+  ->  Bitmap Heap Scan on pedido  (cost=4.50..41.46 rows=10 width=41) (actual time=0.056..0.096 rows=9 loops=1)
+        Recheck Cond: (cliente_id = 545)
+        Heap Blocks: exact=9
+        Buffers: shared hit=15
+        ->  Bitmap Index Scan on idx_pedido_cliente_data  (cost=0.00..4.49 rows=10 width=0) (actual time=0.037..0.037 rows=9 loops=1)
+              Index Cond: (cliente_id = 545)
+              Buffers: shared hit=6
+Planning:
+  Buffers: shared hit=116
+Planning Time: 0.694 ms
+Execution Time: 0.210 ms

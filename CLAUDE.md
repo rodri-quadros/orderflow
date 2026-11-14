@@ -7,6 +7,11 @@ API REST (sem frontend) de pedidos, clientes, produtos e itens para demonstrar, 
 
 Fluxo: identificar o problema → implementar alternativa → medir → comparar → justificar.
 
+## Fontes obrigatórias de consulta
+- `docs/enunciado-a2.md` — requisitos oficiais do trabalho (o que precisa ser entregue e respondido).
+- `docs/referencias-aulas.md` — padrões de código e vocabulário da disciplina (seguir nomes e estilo).
+Em caso de dúvida, o enunciado prevalece; registre aqui qualquer divergência deliberada.
+
 ## Stack (versões efetivas)
 Java 21 · Spring Boot 4.1.2 (Initializr) · Hibernate ORM 7.4.13 · Jakarta Persistence 3.2 · HikariCP 7.0.2 ·
 PostgreSQL 17 (`postgres:17-alpine`) · Redis 8 (`redis:8-alpine`, cliente Lettuce 7.5) · Docker Compose · k6 · Maven Wrapper.
@@ -25,11 +30,14 @@ classes/propriedades nos jars antes de usar (não inventar APIs).
 - Sem `default_batch_fetch_size` global (esconderia o N+1; batch fetching será variante estudada).
 - Experimento EAGER usa entidade **`PedidoEager` separada e somente leitura** (`@Immutable`) mapeando a mesma tabela,
   para não contaminar as demais consultas.
-- Header de resposta **`X-SQL-Count`** com o nº de SQLs da requisição (via `StatementInspector`, etapa futura).
+- Header **`X-SQL-Count`** em toda resposta de `/api/**` com o nº de SQLs da requisição (`config.ContadorSql`, um
+  `StatementInspector` com `ThreadLocal`, + `config.FiltroContadorSql`). Fonte da "quantidade de acessos ao banco".
 - Volume: **100 mil pedidos** (≥ 10 mil exigidos no enunciado).
 - Toda configuração em `.env` (lido pelo Compose e pelo Spring via `spring.config.import`); nenhum segredo versionado.
 - `SQL_LOG_LEVEL=debug` nos experimentos de consulta; `info` nos testes de carga.
 - Portas só em `127.0.0.1`; Postgres no host em `5433` (5432 ocupada por instalação local).
+- **Datas sem conversão de fuso**: colunas `TIMESTAMP` (sem fuso) + `LocalDateTime`, e **sem** `hibernate.jdbc.time_zone`.
+  Com `time_zone: UTC` o Hibernate deslocava -3 h (fuso da JVM) na gravação e na leitura, e a API divergia do psql.
 
 ## Banco de dados
 - `db/init/02_schema.sql`: `cliente`, `produto`, `pedido`, `item_pedido` (PK identity).
@@ -42,6 +50,98 @@ classes/propriedades nos jars antes de usar (não inventar APIs).
 - Entidades: todos os `@ManyToOne` e `Pedido.itens` são LAZY explícitos; sem `Cliente.pedidos`/`Produto.itens`.
   Itens persistem em cascata por `Pedido.adicionarItem` (sem repositório de item).
 - Recarregar: `docker compose down -v && docker compose up -d`. Validar: `db/validacao_dados.sql` (saída em `resultados/volume-dados.txt`).
+
+## API (Etapa 4)
+| Método | Rota | Sucesso |
+|---|---|---|
+| POST | `/api/clientes` | 201 + Location |
+| GET | `/api/clientes/{id}` | 200 |
+| GET | `/api/clientes/{id}/pedidos?page&size` | 200 (`size` 1–100, ordem `dataPedido` DESC) |
+| POST | `/api/produtos` | 201 + Location (`/{id}/sem-cache`) |
+| GET | `/api/produtos/{id}/sem-cache` | 200 |
+| PUT | `/api/produtos/{id}` | 200 |
+| POST | `/api/pedidos` | 201 + Location |
+| GET | `/api/pedidos/{id}` | 200 |
+| PATCH | `/api/pedidos/{id}/status` | 200 |
+
+Códigos de erro: 400 = Bean Validation, JSON malformado, enum inválido, tipo de parâmetro inválido;
+404 = cliente/produto/pedido inexistente; 409 = transição de status inválida, email duplicado, violação de integridade;
+422 = produto inativo ou repetido no pedido; 500 = genérico (stack trace só no log).
+Erros sempre em `ProblemDetail` (`TratadorDeErros extends ResponseEntityExceptionHandler`), com `erros[{campo, mensagem}]` nos 400 de validação.
+
+Decisões da Etapa 4:
+- DTOs `record` em `dto` (`...Request` entrada, `...DTO` saída, fábrica estática `de(entidade)`); entidades nunca saem da API.
+- `ProdutoService.buscarProduto(id)` → `ProdutoRepository.buscarDTO(id)` (constructor expression, 1 SQL). Na Etapa 5 o
+  `@Cacheable` entra num método do service (cuidado com auto-invocação: chamar via proxy, não `this.`).
+- `PedidoRepository.buscarResumosPorCliente(clienteId, Pageable)` → `List` (sem count), SQL `WHERE cliente_id=? ORDER BY data_pedido DESC FETCH FIRST ? ROWS`.
+  A existência do cliente só é consultada se a lista vier vazia (caminho comum = 1 SQL).
+- `PedidoRepository.buscarComItens(id)`: JOIN FETCH cliente + itens + produto (1 SQL), usado por GET e PATCH.
+- Criação de pedido: `findAllById` uma vez + `Map<Long, Produto>` (2 SELECTs fixos); INSERT por item é inevitável com IDENTITY.
+- Regra de status só em `StatusPedido.podeMudarPara`, aplicada por `Pedido.alterarStatus`.
+- Sem `@Validated` na classe do controller: a validação nativa do Spring MVC trata `@Min/@Max` dos parâmetros
+  (`HandlerMethodValidationException`); com `@Validated` o proxy AOP lançaria `ConstraintViolationException`.
+- Sem conversão de fuso (ver "Decisões já tomadas").
+
+## Cache (Etapa 5)
+- `GET /api/produtos/{id}/sem-cache` → `ProdutoService.buscarProduto` (cenário A); `GET /api/produtos/{id}/com-cache` →
+  `buscarProdutoComCache` com `@Cacheable(value = "produtos", key = "#id")` (cenário B). Ambos chamados direto pelo controller.
+- `PUT /api/produtos/{id}` → `atualizar` com `@CacheEvict(value = "produtos", key = "#id")` (evict, não `@CachePut`).
+- `config.CacheConfig`: `RedisCacheManager` com TTL `CACHE_TTL_PRODUTOS` (padrão 5m), sem nulos, serializador **tipado**
+  `JacksonJsonRedisSerializer<>(ProdutoDTO.class)` (sem default typing), chave `produtos::{id}`, `disableCreateOnMissingCache`,
+  `transactionAware`, `enableStatistics` e `immediateWrites` (no Spring Data Redis 4.1 o put/evict é **assíncrono por padrão**;
+  síncrono garante que a chave já saiu quando o PUT responde).
+- `@EnableCaching(order = HIGHEST_PRECEDENCE)`: proxy de cache por fora do `@Transactional` → HIT não abre transação nem
+  pega conexão do pool (conferido no log do `JpaTransactionManager`); evict do PUT roda após o commit.
+- `config.TratadorErroCache` (`CacheErrorHandler`): Redis fora → `warn` e segue para o banco (200, não 500).
+  Timeout do Redis 500 ms: com Redis parado, GET com cache ≈ 1 s (get + put expiram), PUT ≈ 0,7 s.
+- Criação de pedido lê preço com `findAllById` (banco), nunca do cache.
+- Métricas: `/actuator/metrics/cache.gets?tag=result:hit|miss`, `cache.puts`, `cache.removals`.
+- Experimento: `scripts/experimento-cache.sh` (API com `CACHE_TTL_PRODUTOS=10s SQL_LOG_LEVEL=info`) →
+  `resultados/cache/experimento-cache.txt`. Restaura o preço e remove o pedido que cria; a base continua idêntica à da Etapa 3.
+- O script também confere: corpo do HIT idêntico byte a byte ao `/sem-cache` (escala `788.60` preservada), 404 sem
+  criar chave e `redis-cli MONITOR` (GET, SET ... PX, GET).
+
+## Experimentos de persistência (Etapa 6)
+- `entity.PedidoEager`: mesma tabela `pedido`, `@Immutable`, cliente e itens **EAGER** (`@OneToMany` unidirecional com
+  `@JoinColumn(name = "pedido_id", insertable = false, updatable = false)`), `PedidoEagerRepository.findAllByOrderByIdAsc(Limit)`.
+  `Pedido` (LAZY) continua sendo a entidade da API.
+- `ExperimentoService` (`@Transactional(readOnly = true)`, `EntityManager` no estilo da aula) + `ExperimentoController`
+  em `/api/experimentos/pedidos/{lazy,eager,eager/{id},join-fetch,nativa,resumo-lazy,resumo-eager}?limite=1..1000`.
+  Todas devolvem os `limite` primeiros pedidos por id; LAZY, EAGER, JOIN FETCH e nativa geram JSON idêntico.
+- SQLs observados (N pedidos, C clientes distintos): LAZY = EAGER em lista = 1 + N + C (1.937 com N=1000);
+  `eager/{id}` = 1 (JOIN); JOIN FETCH = 2 (ids, depois `IN :ids`, para evitar paginação em memória HHH90003004);
+  nativa = 1; resumo-lazy = 1 + C; resumo-eager = 1 + N + C (itens carregados sem uso).
+- `item.getProduto().getId()` lê o id do proxy sem consulta (não foi preciso mapear `produto_id` à parte).
+- `scripts/experimento-persistencia.sh`: sobe a própria API (jar, porta 18080 ou `PORTA_EXPERIMENTO`) com
+  `SQL_LOG_LEVEL=info` para medir e com `debug` + log de parâmetros (`org.hibernate.orm.jdbc.bind=trace`) para as
+  evidências; saída em `resultados/persistencia/` (CSV, TXT, `sql-*.txt`). A porta 8081 está ocupada nesta máquina.
+- `StatementTimeoutTest`: `SHOW statement_timeout` = `10s` pela conexão da aplicação e `pg_sleep(11)` cancelado
+  (deixa o `verify` cerca de 10 s mais lento).
+- Coleção Postman: 46 requisições (pastas Clientes, Produtos, Cache, Experimentos, Pedidos).
+
+## Índices (Etapa 7)
+- **Estado padrão do banco: sem `idx_pedido_cliente_data` e sem `idx_pedido_cliente`** (só `pedido_pkey` em `pedido`).
+  É o "antes" do experimento; nenhum índice extra entra em `db/init`.
+- Alternar (como admin, pelo host; o `pedidos_app` não tem DDL):
+  `set -a; . ./.env; set +a; PGPASSWORD=$POSTGRES_ADMIN_PASSWORD psql -h 127.0.0.1 -p $POSTGRES_PORT -U $POSTGRES_ADMIN_USER -d $POSTGRES_DB -f db/indice/criar_indice.sql`
+  (`remover_indice.sql` volta; `criar_indice_simples.sql`/`remover_indice_simples.sql` só para comparação).
+- `db/indice/explain_pedidos_cliente.sql`: consultas A (SQL do Hibernate copiado do log, páginas 0 e 2), B (enunciado)
+  e C (slide, intervalo), separadas por `-- consulta:`; uso manual com `-v cliente=1`.
+- `scripts/experimento-indice.sh`: estados sem → simples → composto → sem_final (controle de aquecimento da JVM);
+  planos em `resultados/explain/`, CSV/TXT em `resultados/indice/`; inserção de 10 mil pedidos em `BEGIN ... ROLLBACK`
+  com ids explícitos + `VACUUM` entre execuções; mede também o WAL gerado; termina com `VACUUM FULL pedido` +
+  `VACUUM ANALYZE` (tamanho físico original). Verificação da Etapa 6 numa porta +10, com `PULAR_EMPACOTAMENTO=1`.
+- Resultado: cliente 1 página 0 com Index Scan sem Sort (0,054 ms, 26 buffers) × Seq Scan + top-N heapsort (3,5–4,8 ms,
+  907 buffers); B, C e cliente 545 usam Bitmap Heap Scan + Sort mesmo com o composto (decisão de custo, explicada no README).
+  Índice composto 3,1 MB (43% da tabela), +33% de WAL na inserção; `idx_scan` +4 com 4 chamadas à API.
+- `X-SQL-Count` de `/api/clientes/{id}/pedidos` é 1 (2 só quando a página vem vazia: confere a existência do cliente).
+
+## Divergências deliberadas em relação às aulas
+- Aula: `buscarProduto` é o método com `@Cacheable` e `invalidarCache(id)` é um método separado com `@CacheEvict`.
+  Aqui: `buscarProduto` = sem cache (A), `buscarProdutoComCache` = com cache (B), e o `@CacheEvict` fica no próprio
+  `atualizar` (um `this.invalidarCache()` dentro do service ignoraria o proxy e não invalidaria nada).
+- `buscarDTO` retorna `Optional<ProdutoDTO>` (para responder 404), não `ProdutoDTO`.
+- JOIN FETCH via `@Query` no repositório em vez de `entityManager.createQuery` (mesma JPQL).
 
 ## Regras de código
 - Simplicidade e legibilidade acima de sofisticação; nada que não sirva aos requisitos do trabalho.

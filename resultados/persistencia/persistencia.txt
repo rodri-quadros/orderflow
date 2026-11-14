@@ -1,0 +1,51 @@
+=== Experimento de persistência — 2026-11-13 21:53:12
+Base: 100.000 pedidos (os 'limite' primeiros por id). 3 aquecimentos descartados + 5 medidas por linha.
+Tempo = mediana de curl time_total; SQLs = header X-SQL-Count; API com SQL_LOG_LEVEL=info.
+
+--- Aquecimento geral da JVM (descartado)
+
+--- Medições
+  lazy          10     SQLs    21 | mediana     12.33 ms |     2713 bytes |   10 pedidos,   26 itens
+  eager         10     SQLs    21 | mediana     10.91 ms |     2713 bytes |   10 pedidos,   26 itens
+  join-fetch    10     SQLs     2 | mediana      9.64 ms |     2713 bytes |   10 pedidos,   26 itens
+  nativa        10     SQLs     1 | mediana      6.43 ms |     2713 bytes |   10 pedidos,   26 itens
+  resumo-lazy   10     SQLs    11 | mediana      8.07 ms |      943 bytes |   10 pedidos,    0 itens
+  resumo-eager  10     SQLs    21 | mediana     11.57 ms |      943 bytes |   10 pedidos,    0 itens
+  lazy          100    SQLs   201 | mediana     48.10 ms |    29391 bytes |  100 pedidos,  299 itens
+  eager         100    SQLs   201 | mediana     45.12 ms |    29391 bytes |  100 pedidos,  299 itens
+  join-fetch    100    SQLs     2 | mediana     14.69 ms |    29391 bytes |  100 pedidos,  299 itens
+  nativa        100    SQLs     1 | mediana      7.84 ms |    29391 bytes |  100 pedidos,  299 itens
+  resumo-lazy   100    SQLs   101 | mediana     18.54 ms |     9512 bytes |  100 pedidos,    0 itens
+  resumo-eager  100    SQLs   201 | mediana     35.44 ms |     9512 bytes |  100 pedidos,    0 itens
+  lazy          1000   SQLs  1937 | mediana    237.18 ms |   295258 bytes | 1000 pedidos, 2995 itens
+  eager         1000   SQLs  1937 | mediana    233.30 ms |   295258 bytes | 1000 pedidos, 2995 itens
+  join-fetch    1000   SQLs     2 | mediana     44.89 ms |   295258 bytes | 1000 pedidos, 2995 itens
+  nativa        1000   SQLs     1 | mediana     13.13 ms |   295258 bytes | 1000 pedidos, 2995 itens
+  resumo-lazy   1000   SQLs   937 | mediana     90.42 ms |    96176 bytes | 1000 pedidos,    0 itens
+  resumo-eager  1000   SQLs  1937 | mediana    233.06 ms |    96176 bytes | 1000 pedidos,    0 itens
+  eager-por-id  id=1   SQLs     1 | mediana      4.59 ms |      406 bytes |    1 pedidos,    5 itens
+
+--- Mesmo resultado em todas as estratégias (JSON normalizado com jq -S)
+  [OK]     lazy?limite=10               = eager?limite=10              (4329 bytes)
+  [OK]     lazy?limite=10               = join-fetch?limite=10         (4329 bytes)
+  [OK]     lazy?limite=10               = nativa?limite=10             (4329 bytes)
+  [OK]     resumo-lazy?limite=10        = resumo-eager?limite=10       (1245 bytes)
+  [OK]     lazy?limite=100              = eager?limite=100             (47249 bytes)
+  [OK]     lazy?limite=100              = join-fetch?limite=100        (47249 bytes)
+  [OK]     lazy?limite=100              = nativa?limite=100            (47249 bytes)
+  [OK]     resumo-lazy?limite=100       = resumo-eager?limite=100      (12514 bytes)
+  [OK]     lazy?limite=1000             = eager?limite=1000            (474040 bytes)
+  [OK]     lazy?limite=1000             = join-fetch?limite=1000       (474040 bytes)
+  [OK]     lazy?limite=1000             = nativa?limite=1000           (474040 bytes)
+  [OK]     resumo-lazy?limite=1000      = resumo-eager?limite=1000     (126178 bytes)
+
+--- Evidências de SQL (limite=3, com parâmetros)
+  /lazy?limite=3             X-SQL-Count 7 -> resultados/persistencia/sql-lazy.txt
+  /eager?limite=3            X-SQL-Count 7 -> resultados/persistencia/sql-eager.txt
+  /join-fetch?limite=3       X-SQL-Count 2 -> resultados/persistencia/sql-join-fetch.txt
+  /nativa?limite=3           X-SQL-Count 1 -> resultados/persistencia/sql-nativa.txt
+  /resumo-lazy?limite=3      X-SQL-Count 4 -> resultados/persistencia/sql-resumo-lazy.txt
+  /resumo-eager?limite=3     X-SQL-Count 7 -> resultados/persistencia/sql-resumo-eager.txt
+  /eager/1                   X-SQL-Count 1 -> resultados/persistencia/sql-eager-por-id.txt
+
+=== Verificações com falha: 0

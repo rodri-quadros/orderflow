@@ -1,0 +1,46 @@
+# GET /api/experimentos/pedidos/join-fetch?limite=3
+# X-SQL-Count: 2
+
+-- SQL 1
+    select
+        p1_0.id 
+    from
+        pedido p1_0 
+    order by
+        p1_0.id 
+    fetch
+        first ? rows only
+    -- binding parameter (1:INTEGER) <- [3]
+
+-- SQL 2
+    select
+        p1_0.id,
+        p1_0.cliente_id,
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone,
+        p1_0.data_pedido,
+        i1_0.pedido_id,
+        i1_0.id,
+        i1_0.preco_unitario,
+        i1_0.produto_id,
+        i1_0.quantidade,
+        p1_0.status,
+        p1_0.valor_total 
+    from
+        pedido p1_0 
+    join
+        cliente c1_0 
+            on c1_0.id=p1_0.cliente_id 
+    join
+        item_pedido i1_0 
+            on p1_0.id=i1_0.pedido_id 
+    where
+        p1_0.id in (?, ?, ?) 
+    order by
+        p1_0.id
+    -- binding parameter (1:BIGINT) <- [1]
+    -- binding parameter (2:BIGINT) <- [2]
+    -- binding parameter (3:BIGINT) <- [3]

@@ -1,0 +1,11 @@
+-- estado: composto | índices em pedido: idx_pedido_cliente_data,pedido_pkey
+-- consulta: A_pagina2 | cliente: 1 | após 3 execuções de aquecimento
+Limit  (cost=147.02..220.32 rows=20 width=33) (actual time=0.281..0.348 rows=20 loops=1)
+  Buffers: shared hit=66
+  ->  Index Scan using idx_pedido_cliente_data on pedido p1_0  (cost=0.42..707.79 rows=193 width=33) (actual time=0.069..0.343 rows=60 loops=1)
+        Index Cond: (cliente_id = 1)
+        Buffers: shared hit=66
+Planning:
+  Buffers: shared hit=113
+Planning Time: 0.923 ms
+Execution Time: 0.423 ms

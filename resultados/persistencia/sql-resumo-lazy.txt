@@ -1,0 +1,56 @@
+# GET /api/experimentos/pedidos/resumo-lazy?limite=3
+# X-SQL-Count: 4
+
+-- SQL 1
+    select
+        p1_0.id,
+        p1_0.cliente_id,
+        p1_0.data_pedido,
+        p1_0.status,
+        p1_0.valor_total 
+    from
+        pedido p1_0 
+    order by
+        p1_0.id 
+    fetch
+        first ? rows only
+    -- binding parameter (1:INTEGER) <- [3]
+
+-- SQL 2
+    select
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone 
+    from
+        cliente c1_0 
+    where
+        c1_0.id=?
+    -- binding parameter (1:BIGINT) <- [8062]
+
+-- SQL 3
+    select
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone 
+    from
+        cliente c1_0 
+    where
+        c1_0.id=?
+    -- binding parameter (1:BIGINT) <- [3713]
+
+-- SQL 4
+    select
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone 
+    from
+        cliente c1_0 
+    where
+        c1_0.id=?
+    -- binding parameter (1:BIGINT) <- [57]

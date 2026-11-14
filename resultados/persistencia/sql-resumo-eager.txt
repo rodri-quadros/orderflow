@@ -1,0 +1,95 @@
+# GET /api/experimentos/pedidos/resumo-eager?limite=3
+# X-SQL-Count: 7
+
+-- SQL 1
+    select
+        pe1_0.id,
+        pe1_0.cliente_id,
+        pe1_0.data_pedido,
+        pe1_0.status,
+        pe1_0.valor_total 
+    from
+        pedido pe1_0 
+    order by
+        pe1_0.id 
+    fetch
+        first ? rows only
+    -- binding parameter (1:INTEGER) <- [3]
+
+-- SQL 2
+    select
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone 
+    from
+        cliente c1_0 
+    where
+        c1_0.id=?
+    -- binding parameter (1:BIGINT) <- [8062]
+
+-- SQL 3
+    select
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone 
+    from
+        cliente c1_0 
+    where
+        c1_0.id=?
+    -- binding parameter (1:BIGINT) <- [3713]
+
+-- SQL 4
+    select
+        c1_0.id,
+        c1_0.data_cadastro,
+        c1_0.email,
+        c1_0.nome,
+        c1_0.telefone 
+    from
+        cliente c1_0 
+    where
+        c1_0.id=?
+    -- binding parameter (1:BIGINT) <- [57]
+
+-- SQL 5
+    select
+        i1_0.pedido_id,
+        i1_0.id,
+        i1_0.preco_unitario,
+        i1_0.produto_id,
+        i1_0.quantidade 
+    from
+        item_pedido i1_0 
+    where
+        i1_0.pedido_id=?
+    -- binding parameter (1:BIGINT) <- [3]
+
+-- SQL 6
+    select
+        i1_0.pedido_id,
+        i1_0.id,
+        i1_0.preco_unitario,
+        i1_0.produto_id,
+        i1_0.quantidade 
+    from
+        item_pedido i1_0 
+    where
+        i1_0.pedido_id=?
+    -- binding parameter (1:BIGINT) <- [2]
+
+-- SQL 7
+    select
+        i1_0.pedido_id,
+        i1_0.id,
+        i1_0.preco_unitario,
+        i1_0.produto_id,
+        i1_0.quantidade 
+    from
+        item_pedido i1_0 
+    where
+        i1_0.pedido_id=?
+    -- binding parameter (1:BIGINT) <- [1]

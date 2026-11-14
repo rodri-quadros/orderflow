@@ -1,0 +1,14 @@
+-- estado: sem_final | índices em pedido: pedido_pkey
+-- consulta: B_sem_limite | cliente: 1 | após 3 execuções de aquecimento
+Sort  (cost=2161.96..2162.48 rows=207 width=41) (actual time=3.312..3.321 rows=225 loops=1)
+  Sort Key: data_pedido DESC
+  Sort Method: quicksort  Memory: 38kB
+  Buffers: shared hit=907
+  ->  Seq Scan on pedido  (cost=0.00..2154.00 rows=207 width=41) (actual time=0.023..3.262 rows=225 loops=1)
+        Filter: (cliente_id = 1)
+        Rows Removed by Filter: 99775
+        Buffers: shared hit=904
+Planning:
+  Buffers: shared hit=92
+Planning Time: 0.404 ms
+Execution Time: 3.369 ms

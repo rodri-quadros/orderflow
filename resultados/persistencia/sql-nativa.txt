@@ -1,0 +1,32 @@
+# GET /api/experimentos/pedidos/nativa?limite=3
+# X-SQL-Count: 1
+
+-- SQL 1
+    SELECT
+        p.id,
+        p.data_pedido,
+        p.status,
+        p.valor_total,
+        c.nome AS cliente_nome,
+        i.produto_id,
+        i.quantidade,
+        i.preco_unitario 
+    FROM
+        (SELECT
+            * 
+        FROM
+            pedido 
+        ORDER BY
+            id 
+        LIMIT
+            ?) p 
+    JOIN
+        cliente c 
+            ON c.id = p.cliente_id 
+    JOIN
+        item_pedido i 
+            ON i.pedido_id = p.id 
+    ORDER BY
+        p.id,
+        i.id 
+    -- binding parameter (1:INTEGER) <- [3]

@@ -1,0 +1,14 @@
+-- estado: sem | índices em pedido: pedido_pkey
+-- consulta: C_intervalo | cliente: 545 | após 3 execuções de aquecimento
+Sort  (cost=2404.04..2404.05 rows=4 width=41) (actual time=5.784..5.785 rows=3 loops=1)
+  Sort Key: data_pedido DESC
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=907
+  ->  Seq Scan on pedido  (cost=0.00..2404.00 rows=4 width=41) (actual time=1.341..5.743 rows=3 loops=1)
+        Filter: ((data_pedido >= '2026-01-01 00:00:00'::timestamp without time zone) AND (cliente_id = 545))
+        Rows Removed by Filter: 99997
+        Buffers: shared hit=904
+Planning:
+  Buffers: shared hit=99
+Planning Time: 0.830 ms
+Execution Time: 5.859 ms

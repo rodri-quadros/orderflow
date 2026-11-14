@@ -1,0 +1,85 @@
+=== Experimento de índices — 2026-11-13 22:14:05
+Base: 100000 pedidos; cliente 1 = 225 pedidos, cliente 545 = 9 pedidos.
+Banco: mediana do Execution Time de 10 EXPLAIN ANALYZE após 3 de aquecimento.
+API: GET /api/clientes/{id}/pedidos?page={0|2}&size=20, 3 aquecimentos + 20 medidas (curl time_total).
+Linhas = linhas devolvidas pelo nó de varredura; removidas = Rows Removed by Filter; hit/read = buffers do nó raiz.
+
+psql:db/indice/remover_indice.sql:2: NOTICE:  index "idx_pedido_cliente_data" does not exist, skipping
+psql:db/indice/remover_indice_simples.sql:2: NOTICE:  index "idx_pedido_cliente" does not exist, skipping
+--- Aquecimento geral da API (descartado)
+
+--- Estado: sem
+  Índices em pedido (pg_indexes): pedido_pkey
+  consulta      cliente varredura         indice                   sort            linhas removidas   hit/read     banco_ms       api_ms    api_p95  sql
+  A_pagina0     1       Seq Scan          -                        top-N heapsort     225    99775      907/0        4.825        9.110      10.76    1
+  A_pagina2     1       Seq Scan          -                        top-N heapsort     225    99775      907/0        4.189        9.740      11.10    1
+  B_sem_limite  1       Seq Scan          -                        quicksort          225    99775      907/0        2.689            -          -    -
+  C_intervalo   1       Seq Scan          -                        quicksort          100    99900      907/0        3.616            -          -    -
+  A_pagina0     545     Seq Scan          -                        quicksort            9    99991      907/0        5.107        9.590      10.39    1
+  A_pagina2     545     Seq Scan          -                        quicksort            9    99991      907/0        3.547        9.970      10.41    2
+  B_sem_limite  545     Seq Scan          -                        quicksort            9    99991      907/0        4.040            -          -    -
+  C_intervalo   545     Seq Scan          -                        quicksort            3    99997      907/0        3.162            -          -    -
+  Inserção de 10.000 pedidos (BEGIN ... ROLLBACK), 5 execuções: 104.945 100.753 105.332 105.676 106.165 ms -> mediana 105.332 ms | WAL gerado 2136 KB
+  [OK]     pedidos após o ROLLBACK = 100000
+
+--- Estado: simples
+  Índices em pedido (pg_indexes): idx_pedido_cliente,pedido_pkey
+  consulta      cliente varredura         indice                   sort            linhas removidas   hit/read     banco_ms       api_ms    api_p95  sql
+  A_pagina0     1       Bitmap Heap Scan  idx_pedido_cliente       top-N heapsort     225        0      209/0        0.204        4.655       5.07    1
+  A_pagina2     1       Bitmap Heap Scan  idx_pedido_cliente       top-N heapsort     225        0      209/0        0.217        4.840       5.20    1
+  B_sem_limite  1       Bitmap Heap Scan  idx_pedido_cliente       quicksort          225        0      209/0        0.241            -          -    -
+  C_intervalo   1       Bitmap Heap Scan  idx_pedido_cliente       quicksort          100      125      209/0        0.199            -          -    -
+  A_pagina0     545     Bitmap Heap Scan  idx_pedido_cliente       quicksort            9        0       17/0        0.079        4.470       4.97    1
+  A_pagina2     545     Bitmap Heap Scan  idx_pedido_cliente       quicksort            9        0       17/0        0.075        5.325       5.77    2
+  B_sem_limite  545     Bitmap Heap Scan  idx_pedido_cliente       quicksort            9        0       17/0        0.089            -          -    -
+  C_intervalo   545     Bitmap Heap Scan  idx_pedido_cliente       quicksort            3        6       17/0        0.081            -          -    -
+  idx_scan de idx_pedido_cliente: 204 antes -> 208 depois de 4 chamadas à API
+  [OK]     aumento do idx_scan (1 por chamada à API) = 4
+  Tamanho: tabela pedido 7232 kB | idx_pedido_cliente 920 kB | pedido_pkey 2632 kB
+  Inserção de 10.000 pedidos (BEGIN ... ROLLBACK), 5 execuções: 114.875 140.906 114.583 109.465 104.802 ms -> mediana 114.583 ms | WAL gerado 2815 KB
+  [OK]     pedidos após o ROLLBACK = 100000
+
+--- Estado: composto
+  Índices em pedido (pg_indexes): idx_pedido_cliente_data,pedido_pkey
+  consulta      cliente varredura         indice                   sort            linhas removidas   hit/read     banco_ms       api_ms    api_p95  sql
+  A_pagina0     1       Index Scan        idx_pedido_cliente_data  nenhum              20        0       26/0        0.054        4.165       4.83    1
+  A_pagina2     1       Index Scan        idx_pedido_cliente_data  nenhum              60        0       66/0        0.081        4.880       7.72    1
+  B_sem_limite  1       Bitmap Heap Scan  idx_pedido_cliente_data  quicksort          225        0      210/0        0.246            -          -    -
+  C_intervalo   1       Bitmap Heap Scan  idx_pedido_cliente_data  quicksort          100        0      105/0        0.153            -          -    -
+  A_pagina0     545     Bitmap Heap Scan  idx_pedido_cliente_data  quicksort            9        0       18/0        0.083        4.380       4.98    1
+  A_pagina2     545     Bitmap Heap Scan  idx_pedido_cliente_data  quicksort            9        0       18/0        0.086        5.175       6.14    2
+  B_sem_limite  545     Bitmap Heap Scan  idx_pedido_cliente_data  quicksort            9        0       18/0        0.076            -          -    -
+  C_intervalo   545     Bitmap Heap Scan  idx_pedido_cliente_data  quicksort            3        0       12/0        0.073            -          -    -
+  idx_scan de idx_pedido_cliente_data: 204 antes -> 208 depois de 4 chamadas à API
+  [OK]     aumento do idx_scan (1 por chamada à API) = 4
+  Tamanho: tabela pedido 7232 kB | idx_pedido_cliente_data 3104 kB | pedido_pkey 2632 kB
+  Inserção de 10.000 pedidos (BEGIN ... ROLLBACK), 5 execuções: 114.590 113.806 108.191 110.086 112.936 ms -> mediana 112.936 ms | WAL gerado 2842 KB
+  [OK]     pedidos após o ROLLBACK = 100000
+  Etapa 6 com o índice composto (limite=100):
+  [OK]     planos das consultas da Etapa 6 iguais aos sem índice = sim
+  [OK]     SQLs por estratégia (limite=100) iguais aos da Etapa 6 = sim
+    estrategia,sqls: lazy,201 eager,201 join-fetch,2 nativa,1 resumo-lazy,101 resumo-eager,201
+
+--- Estado: sem_final
+  Índices em pedido (pg_indexes): pedido_pkey
+  consulta      cliente varredura         indice                   sort            linhas removidas   hit/read     banco_ms       api_ms    api_p95  sql
+  A_pagina0     1       Seq Scan          -                        top-N heapsort     225    99775      907/0        3.523        7.750       8.79    1
+  A_pagina2     1       Seq Scan          -                        top-N heapsort     225    99775      907/0        3.181        7.940       9.60    1
+  B_sem_limite  1       Seq Scan          -                        quicksort          225    99775      907/0        3.114            -          -    -
+  C_intervalo   1       Seq Scan          -                        quicksort          100    99900      907/0        3.431            -          -    -
+  A_pagina0     545     Seq Scan          -                        quicksort            9    99991      907/0        3.986        8.360       8.75    1
+  A_pagina2     545     Seq Scan          -                        quicksort            9    99991      907/0        2.217        8.030       9.15    2
+  B_sem_limite  545     Seq Scan          -                        quicksort            9    99991      907/0        3.071            -          -    -
+  C_intervalo   545     Seq Scan          -                        quicksort            3    99997      907/0        4.162            -          -    -
+
+--- Estado final
+  Tamanho: tabela pedido 7232 kB | pedido_pkey 2208 kB
+  [OK]     índices em pedido = pedido_pkey
+  [OK]     pedidos = 100000
+
+--- Custo de inserção (mediana de 5, 10.000 pedidos)
+  sem:      tempo  105.332 ms | WAL   2136 KB
+  simples:  tempo  114.583 ms | WAL   2815 KB
+  composto: tempo  112.936 ms | WAL   2842 KB
+
+=== Verificações com falha: 0

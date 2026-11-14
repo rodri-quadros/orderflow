@@ -20,6 +20,8 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 
+import br.uva.pedidos.exception.ConflitoException;
+
 @Entity
 @Table(name = "pedido")
 public class Pedido {
@@ -66,6 +68,13 @@ public class Pedido {
         valorTotal = itens.stream()
             .map(ItemPedido::getSubtotal)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    public void alterarStatus(StatusPedido novo) {
+        if (!status.podeMudarPara(novo)) {
+            throw new ConflitoException("Transição de status inválida: " + status + " -> " + novo);
+        }
+        status = novo;
     }
 
     public Long getId() {

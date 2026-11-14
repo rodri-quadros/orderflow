@@ -1,0 +1,121 @@
+=== Experimento de cache — 2026-11-13 21:48:37 — produto 10
+Banco: 1000 produtos, 100000 pedidos
+
+--- Passo 0: estado inicial conhecido (FLUSHDB)
+  Redis: EXISTS produtos::10 = 0 | TTL = -2 s | GET = 
+  Actuator cache.gets (acumulado): hit=207 miss=207
+
+--- Passo 1: cenário A, sem cache (2 consultas seguidas)
+  GET   /api/produtos/10/sem-cache       -> HTTP 200 | X-SQL-Count: 1 | tempo:    3.2 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1419.87,"ativo":true}
+  [OK]     X-SQL-Count (consulta 1) = 1
+  GET   /api/produtos/10/sem-cache       -> HTTP 200 | X-SQL-Count: 1 | tempo:    2.5 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1419.87,"ativo":true}
+  [OK]     X-SQL-Count (consulta 2) = 1
+  Redis: EXISTS produtos::10 = 0 | TTL = -2 s | GET = 
+  Actuator cache.gets (acumulado): hit=207 miss=207
+  [OK]     EXISTS (sem-cache não grava no cache) = 0
+
+--- Passo 2: cenário B, cache vazio -> MISS
+  GET   /api/produtos/10/com-cache       -> HTTP 200 | X-SQL-Count: 1 | tempo:    4.2 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1419.87,"ativo":true}
+  [OK]     X-SQL-Count (MISS) = 1
+  [OK]     EXISTS (chave criada) = 1
+  Redis: EXISTS produtos::10 = 1 | TTL = 10 s | GET = {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1419.87,"ativo":true}
+  Actuator cache.gets (acumulado): hit=207 miss=208
+
+--- Passo 3: cenário B de novo -> HIT
+  GET   /api/produtos/10/com-cache       -> HTTP 200 | X-SQL-Count: 0 | tempo:    2.4 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1419.87,"ativo":true}
+  [OK]     X-SQL-Count (HIT) = 0
+  [OK]     corpo igual ao do passo 2 = sim
+  cmp com-cache (124 bytes) x sem-cache (124 bytes)
+  [OK]     corpo do cache idêntico byte a byte ao do banco = sim
+  Redis: EXISTS produtos::10 = 1 | TTL = 9 s | GET = {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1419.87,"ativo":true}
+  Actuator cache.gets (acumulado): hit=209 miss=208
+
+--- Passo 4: PUT alterando o preço de 1419.87 para 1519.87 -> invalidação
+  PUT   /api/produtos/10                 -> HTTP 200 | X-SQL-Count: 2 | tempo:   10.4 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  [OK]     HTTP do PUT = 200
+  [OK]     EXISTS (chave removida pelo @CacheEvict) = 0
+  Redis: EXISTS produtos::10 = 0 | TTL = -2 s | GET = 
+  Actuator cache.gets (acumulado): hit=209 miss=208
+
+--- Passo 5: consulta após a alteração -> MISS com preço novo, depois HIT
+  GET   /api/produtos/10/com-cache       -> HTTP 200 | X-SQL-Count: 1 | tempo:    4.2 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  [OK]     X-SQL-Count (MISS após invalidação) = 1
+  [OK]     preço retornado = 1519.87
+  GET   /api/produtos/10/com-cache       -> HTTP 200 | X-SQL-Count: 0 | tempo:    2.0 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  [OK]     X-SQL-Count (HIT) = 0
+  [OK]     preço retornado = 1519.87
+  Redis: EXISTS produtos::10 = 1 | TTL = 10 s | GET = {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  Actuator cache.gets (acumulado): hit=210 miss=209
+
+--- Passo 6: expiração por TTL (TTL configurado: 10s)
+  aguardando expiração... TTL restante = 9 s
+  aguardando expiração... TTL restante = 7 s
+  aguardando expiração... TTL restante = 5 s
+  aguardando expiração... TTL restante = 3 s
+  aguardando expiração... TTL restante = 0 s
+  [OK]     EXISTS (expirou sem nenhuma escrita) = 0
+  GET   /api/produtos/10/com-cache       -> HTTP 200 | X-SQL-Count: 1 | tempo:    4.4 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  [OK]     X-SQL-Count (MISS por expiração) = 1
+  Redis: EXISTS produtos::10 = 1 | TTL = 10 s | GET = {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  Actuator cache.gets (acumulado): hit=210 miss=210
+
+--- Passo 7: risco de dado desatualizado (escrita direto no banco, sem passar pela API)
+  GET   /api/produtos/10/com-cache       -> HTTP 200 | X-SQL-Count: 1 | tempo:    4.2 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  UPDATE produto SET preco = 1619.87 WHERE id = 10   (fora da aplicação: nenhum @CacheEvict é disparado)
+  GET   /api/produtos/10/com-cache       -> HTTP 200 | X-SQL-Count: 0 | tempo:    2.4 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1519.87,"ativo":true}
+  [OK]     com-cache devolve o preço antigo (HIT desatualizado) = 1519.87
+  GET   /api/produtos/10/sem-cache       -> HTTP 200 | X-SQL-Count: 1 | tempo:    2.8 ms
+        corpo: {"id":10,"nome":"Produto 10","descricao":"Descrição do produto 10 para testes de desempenho","preco":1619.87,"ativo":true}
+  [OK]     sem-cache devolve o preço do banco = 1619.87
+  POST  /api/pedidos (produto 10)            -> HTTP 201 | X-SQL-Count: 4 | pedido 100002
+  [OK]     preço cobrado no pedido vem do banco, não do cache = 1619.87
+  (pedido 100002 removido para manter a base reproduzível)
+  O valor antigo continuaria sendo exibido por até 9 s (TTL restante).
+
+--- Restaurando o preço original (1419.87)
+  [OK]     HTTP do PUT = 200
+  [OK]     EXISTS (invalidada de novo) = 0
+
+--- Passo 8: comparação sequencial em 200 produtos distintos (ids 1..200)
+  A sem cache:               média   2.46 ms | p50   2.40 ms | p95   2.90 ms | máx   4.90 ms | SQLs: 200 em 200 requisições
+  B com cache (MISS, frio):  média   3.66 ms | p50   3.50 ms | p95   4.30 ms | máx  17.50 ms | SQLs: 200 em 200 requisições
+  B com cache (HIT, quente): média   2.11 ms | p50   2.10 ms | p95   2.40 ms | máx   3.00 ms | SQLs: 0 em 200 requisições
+  Actuator cache.gets (acumulado): hit=411 miss=411
+
+--- Passo 9: escala do BigDecimal (produto 8, preço com zero final)
+  GET   /api/produtos/8/com-cache        -> HTTP 200 | X-SQL-Count: 1 | tempo:    3.4 ms
+        corpo: {"id":8,"nome":"Produto 8","descricao":"Descrição do produto 8 para testes de desempenho","preco":788.60,"ativo":true}
+  [OK]     X-SQL-Count (MISS) = 1
+  Redis: GET produtos::8 = {"id":8,"nome":"Produto 8","descricao":"Descrição do produto 8 para testes de desempenho","preco":788.60,"ativo":true}
+  [OK]     X-SQL-Count (HIT) = 0
+  [OK]     preço preserva a escala (788.60, não 788.6) = 788.60
+  cmp com-cache (120 bytes) x sem-cache (120 bytes)
+  [OK]     corpo do cache idêntico byte a byte ao do banco = sim
+
+--- Passo 10: produto inexistente não vai para o cache
+  GET   /api/produtos/999999/com-cache   -> HTTP 404 | X-SQL-Count: 1 | tempo:    5.1 ms
+        corpo: {"detail":"Produto 999999 não encontrado","instance":"/api/produtos/999999/com-cache","status":404,"title":"Not Found"}
+  [OK]     HTTP = 404
+  [OK]     EXISTS produtos::999999 = 0
+  [OK]     DBSIZE inalterado = 0
+
+--- Passo 11: comandos que a aplicação envia ao Redis (redis-cli MONITOR durante um MISS e um HIT)
+  GET /api/produtos/20/com-cache -> X-SQL-Count: 1 (MISS)
+  GET /api/produtos/20/com-cache -> X-SQL-Count: 0 (HIT)
+  "GET" "produtos::20"
+  "SET" "produtos::20" "{\"id\":20,\"nome\":\"Produto 20\",\"descricao\":\"Descri\xc3\xa7\xc3\xa3o do produto 20 para testes de desempenho\",\"preco\":1236.44,\"ativo\":true}" "PX" "10000"
+  "GET" "produtos::20"
+  [OK]     comandos GET enviados = 2
+  [OK]     comandos SET enviados (só no MISS) = 1
+
+=== Verificações com falha: 0

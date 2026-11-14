@@ -1,0 +1,19 @@
+-- lazy/eager/join-fetch: lista de pedidos
+Limit
+  ->  Index Scan using pedido_pkey on pedido p1_0
+-- lazy/eager: itens de um pedido (N+1)
+Index Scan using idx_item_pedido_pedido on item_pedido i1_0
+  Index Cond: (pedido_id = 1)
+-- nativa
+Sort
+  Sort Key: p.id, i.id
+  ->  Nested Loop
+        ->  Hash Join
+              Hash Cond: (c.id = p.cliente_id)
+              ->  Seq Scan on cliente c
+              ->  Hash
+                    ->  Subquery Scan on p
+                          ->  Limit
+                                ->  Index Scan using pedido_pkey on pedido
+        ->  Index Scan using idx_item_pedido_pedido on item_pedido i
+              Index Cond: (pedido_id = p.id)
