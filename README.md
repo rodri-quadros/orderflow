@@ -188,7 +188,7 @@ As demais decisões, com o motivo de cada uma, estão em [docs/decisoes-tecnicas
 
 O dado em cache é o **detalhe do produto** (`ProdutoDTO`: nome, descrição, preço e situação):
 
-| Critério (3.1) | Avaliação |
+| Critério (enunciado 3.1) | Avaliação |
 |---|---|
 | Frequência de acesso | Alta: leitura típica de catálogo, feita por todo cliente que navega. |
 | Volatilidade | Média: o preço muda por reajuste, mas é lido muito mais vezes do que muda. |
@@ -322,7 +322,7 @@ provedor, e o `RedisCache` do Spring Data Redis 4.1, com o writer padrão, não 
 bytecode; [apêndice A](docs/apendice-experimentos.md#por-que-sync--true-não-sincroniza-nesta-versão)). Na
 prática, o efeito manada custou cerca de 1.000 MISS numa rodada de 30 s com 99,8% de HIT.
 
-### 3.8. Questões da seção 3.5
+### 3.8. Questões da seção 3.5 do enunciado
 
 **1. Em quais situações o cache apresentou maior benefício?**
 Em leituras repetidas com HIT e carga alta: com 100 a 200 VUs, o throughput foi de 2,4 a 2,5 vezes o do sem
@@ -411,7 +411,7 @@ carregar, não **como**.
 nunca é carregada: 937 SQLs e 90,42 ms para 1000 pedidos. Com EAGER (`/resumo-eager`), o Hibernate carrega os
 2.995 itens mesmo assim: 1.937 SQLs e 233,06 ms, **2,6 vezes mais lento para a mesma resposta**.
 
-#### Quando usar LAZY ou EAGER (4.3)
+#### Quando usar LAZY ou EAGER (enunciado 4.3)
 
 - **LAZY como padrão**, como na aula: só busca o que é acessado. Contra o N+1 de uma listagem, a solução é uma
   consulta específica (JOIN FETCH, projeção em DTO), não trocar o mapeamento.
@@ -466,7 +466,7 @@ LAZY (44,89 × 237,18 ms). Com 10 pedidos a diferença é menor (12,33 × 9,64 m
 
 *O throughput de cada estratégia é praticamente constante desde 10 VUs: o pool de 10 conexões já está saturado.*
 
-#### O SQL nativo trouxe benefícios reais? Manutenção e portabilidade (4.4)
+#### O SQL nativo trouxe benefícios reais? Manutenção e portabilidade (enunciado 4.4)
 
 **Ganho real, mas pequeno depois do JOIN FETCH.** Isolado, com 1000 pedidos, o nativo foi 3,4 vezes mais rápido
 que o JOIN FETCH (13,13 × 44,89 ms); sob carga, com 20 pedidos, a vantagem foi de 16% a 20% em throughput. O salto
@@ -507,7 +507,10 @@ CREATE INDEX idx_pedido_cliente_data ON pedido (cliente_id, data_pedido DESC);
 fiquem na ordem do `ORDER BY`: o banco não ordena e, com `LIMIT 20`, para após 20 entradas.
 
 **Estados medidos:** [scripts/experimento-indice.sh](scripts/experimento-indice.sh) percorre **sem → simples
-(`cliente_id`) → composto → sem**; o último "sem", na JVM já aquecida, é o controle de aquecimento. Fonte: [indice.csv](resultados/indice/indice.csv) e [resultados/explain/](resultados/explain/)
+(`cliente_id`) → composto → sem**; o último "sem", na JVM já aquecida, é o controle de aquecimento. Nos estados
+sem índice, o único índice de `pedido` era o `pedido_pkey`, sobre `id`, que não serve ao filtro por `cliente_id`:
+sem índice aplicável, o planejador fez Seq Scan nas 16 execuções. Nos estados com índice, todos os planos usaram o
+índice recém-criado (`idx_pedido_cliente` no simples, `idx_pedido_cliente_data` no composto), nunca o `pedido_pkey`. Fonte: [indice.csv](resultados/indice/indice.csv) e [resultados/explain/](resultados/explain/)
 (os 32 planos no [apêndice C](docs/apendice-experimentos.md#c-índices-todos-os-planos)).
 
 Consulta da API, página 0. Banco: mediana de 10 `EXPLAIN ANALYZE`; API: mediana de 20 requisições.
@@ -572,7 +575,7 @@ O `idx_scan` subiu de 1,01 a 1,04 por requisição com o índice e 0 sem ele, o 
 
 *Os dois patamares são constantes: cerca de 1.000 req/s sem índice e de 6.780 a 7.013 req/s com ele.*
 
-#### Respostas da seção 5.4
+#### Respostas da seção 5.4 do enunciado
 
 **1. O índice foi efetivamente utilizado pelo banco?**
 Sim, em todas as consultas dos estados com índice; na da API para o cliente 1, da forma ideal (Index Scan sem
@@ -626,7 +629,7 @@ latência sobe. Todos os testes são só de leitura.
 repetições** por nível, com os alvos intercalados; **132 rodadas** em cerca de 115 minutos. No cenário 2, o
 `limite=20` evita que o LAZY, com cerca de 1.937 SQLs por requisição em 1000 pedidos, só meça a fila do pool.
 
-### 5.3. Cuidados adotados (6.5)
+### 5.3. Cuidados adotados (enunciado 6.5)
 
 | Cuidado | O que foi feito |
 |---|---|
@@ -705,7 +708,7 @@ devolvem a mesma resposta, o que torna válida a comparação de desempenho entr
 
 ## 6. Discussão
 
-### 6.1. Questões da seção 6.7
+### 6.1. Questões da seção 6.7 do enunciado
 
 **1. Qual técnica apresentou os maiores ganhos de desempenho?**
 O **índice composto**: throughput de 6,7 a 7,0 vezes maior e p95 de 4,8 a 7,3 vezes menor, em todos os níveis. Por
@@ -747,6 +750,11 @@ o p99 em só 4,1 vezes (429,99 → 105,79 ms).
 | CPU da API | JOIN FETCH | API com 433% a 460% contra 267% a 289% do nativo; PostgreSQL mais baixo (246% a 255% × 406% a 430%) |
 | k6 na mesma máquina | todos | de 33% (LAZY) a 423% (HIT) de CPU, disputando núcleos com a API nos cenários mais rápidos |
 
+A **memória não foi gargalo**. A memória usada pela JVM (pico por rodada, mediana das repetições) ficou entre 266 e
+450 MB e cresceu com os VUs (sem cache: 310 MB com 10 VUs e 445 MB com 200), mas não acompanhou a lentidão: os
+cenários mais lentos usaram menos memória (LAZY de 315 a 382 MB; sem índice de 270 a 286 MB) que o cache com HIT
+(de 315 a 442 MB). Sem erros e com o pool e a CPU saturados, o limite esteve sempre nesses dois recursos.
+
 **6. Como a redução das consultas ao banco influenciou o desempenho?**
 De forma direta. **Persistência:** com 2 e 1 SQLs em vez de 41, o throughput subiu de cerca de 720 para 3.000 e
 3.500 req/s com as mesmas 10 conexões, que cada requisição segura por menos tempo. **Cache:** de cerca de 1
@@ -781,7 +789,7 @@ alvos (1,7 a 7 vezes) são muito maiores, então as conclusões não dependem de
   frequência por temperatura. O k6 chegou a usar cerca de 4 núcleos, e IDE, navegador e um SQL Server continuaram
   abertos (registrados em `ambiente.txt`).
 - **Ordem e temperatura:** a partida a frio superou o HIT na bateria principal e ficou abaixo dele com as
-  condições intercaladas (seção 5.4). Diferenças de cerca de 10% entre alvos medidos em momentos diferentes não
+  condições intercaladas (seção 5.4 deste README). Diferenças de cerca de 10% entre alvos medidos em momentos diferentes não
   devem ser interpretadas.
 - **Modelo fechado sem think time:** mede a capacidade máxima, não usuários reais, que fazem pausas.
 - **Pool fixo em 10 conexões:** vários resultados medem o pool; o tamanho não foi variado.

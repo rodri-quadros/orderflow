@@ -44,9 +44,9 @@ Atualizado na Etapa 11.
 | 4.1 Demonstração do N+1 | 4.1 | `sql-lazy.txt`; `ExperimentoControllerTest` | atendido |
 | 4.2 Versão EAGER equivalente e comportamento observado | 4.1 | `entity/PedidoEager.java`; `sql-eager.txt`, `sql-eager-por-id.txt` | atendido |
 | 4.3 Comparação com quantidades diferentes (SQLs, tempo, volume, dados desnecessários, N+1) | 4.1 | `persistencia.txt` (10, 100 e 1000 pedidos); grid; [apêndice B](apendice-experimentos.md#b-lazy-eager-e-consultas-otimizadas-tabela-completa) | atendido |
-| 4.3 Quando usar LAZY ou EAGER | 4.1 ("Quando usar LAZY ou EAGER (4.3)") | — | atendido |
+| 4.3 Quando usar LAZY ou EAGER | 4.1 ("Quando usar LAZY ou EAGER (enunciado 4.3)") | — | atendido |
 | 4.4 ≥ 1 otimização implementada e comparada | 4.2 | JOIN FETCH em 2 passos e SQL nativo, isolado e sob carga | atendido |
-| 4.4 SQL nativo: ganho real, manutenção e portabilidade | 4.2 ("O SQL nativo trouxe benefícios reais? (4.4)") | — | atendido |
+| 4.4 SQL nativo: ganho real, manutenção e portabilidade | 4.2 ("O SQL nativo trouxe benefícios reais? (enunciado 4.4)") | — | atendido |
 
 ## Seção 5 — Item 2: índices
 
@@ -56,7 +56,7 @@ Atualizado na Etapa 11.
 | 5.2 Execução sem e com índice | 4.3 | `scripts/experimento-indice.sh` (sem → simples → composto → sem) | atendido |
 | 5.2 Uso de outros índices no plano | 4.3 ("Observado, não presumido") | `resultados/explain/*.txt`; [apêndice C](apendice-experimentos.md#c-índices-todos-os-planos) | atendido |
 | 5.3 EXPLAIN ANALYZE: varreduras, ordenação, linhas, tempo | 4.3 | tabela de planos; `resultados/indice/indice.csv` | atendido |
-| 5.4 Perguntas 1 a 5 | 4.3 ("Respostas da seção 5.4") | — | atendido |
+| 5.4 Perguntas 1 a 5 | 4.3 ("Respostas da seção 5.4 do enunciado") | — | atendido |
 
 ## Seção 6 — Item 3: testes de desempenho
 
