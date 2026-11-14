@@ -2,8 +2,6 @@
 
 **Trabalho Prático A2** · Análise e Otimização de Sistemas · Prof. André Lucio · Universidade Veiga de Almeida · 2026.2
 
-**Integrantes:** <preencher>
-
 ## Sumário
 
 1. [Introdução](#1-introdução)

@@ -166,7 +166,7 @@ Decisões da Etapa 4:
 ## Relatório e estado final (Etapa 10)
 - **Todas as etapas técnicas concluídas**; falta só a Etapa 11 (vídeo de até 7 min, commit e entrega).
 - `README.md` = relatório da seção 7.2, nas seções 1–7 do enunciado + 8 (reproduzir) + 9 (estrutura); ~890 linhas,
-  ~20 min de leitura. Linha `**Integrantes:** <preencher>` no cabeçalho, para o usuário completar.
+  ~20 min de leitura. **Nomes e matrículas dos alunos nunca entram em arquivo versionado** (só em `apresentacao/`, ignorada).
 - Detalhes longos fora do README: `docs/apendice-experimentos.md` (passo a passo do cache, tabela completa da
   Etapa 6, os 32 planos, Lei de Little, checagem frio × HIT, testes por classe) e `docs/decisoes-tecnicas.md`
   (decisões com motivo). `resultados/carga/analise-preliminar.md` é histórico da Etapa 9.
