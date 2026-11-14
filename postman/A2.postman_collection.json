@@ -441,6 +441,36 @@
           }
         },
         {
+          "name": "Buscar produto com cache (sync = true)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/produtos/{{produtoAtivo}}/com-cache-sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "produtos",
+                "{{produtoAtivo}}",
+                "com-cache-sync"
+              ]
+            }
+          }
+        },
+        {
           "name": "Atualizar produto criado",
           "event": [
             {

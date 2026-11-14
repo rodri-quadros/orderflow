@@ -1,51 +1,95 @@
-# Trabalho A2 — Otimização de Web Services
+# Otimização de Web Services por meio de Cache, Consultas ao Banco de Dados e Testes de Desempenho
 
-> O relatório técnico completo será escrito ao final do trabalho.
+**Trabalho Prático A2** · Análise e Otimização de Sistemas · Prof. André Lucio · Universidade Veiga de Almeida · 2026.2
 
-## Como executar o ambiente
+**Integrantes:** <preencher>
 
-### Pré-requisitos
-- Java 21
-- Docker com Docker Compose v2
+## Sumário
 
-O Maven não precisa estar instalado: o projeto usa o Maven Wrapper (`./mvnw`).
+1. [Introdução](#1-introdução)
+2. [Arquitetura e tecnologias](#2-arquitetura-e-tecnologias)
+3. [Implementação de cache](#3-implementação-de-cache)
+4. [Otimização das consultas](#4-otimização-das-consultas)
+5. [Testes de desempenho](#5-testes-de-desempenho)
+6. [Discussão](#6-discussão)
+7. [Conclusão](#7-conclusão)
+8. [Como executar e reproduzir](#8-como-executar-e-reproduzir)
+9. [Estrutura do repositório](#9-estrutura-do-repositório)
 
-### 1. Configurar as variáveis
-```bash
-cp .env.example .env
+Apêndices: [detalhes dos experimentos](docs/apendice-experimentos.md) · [decisões técnicas](docs/decisoes-tecnicas.md) ·
+[checklist de requisitos](docs/checklist-requisitos.md)
+
+### Resultados em uma olhada
+
+Testes de carga com k6, 100 usuários virtuais (VUs), mediana de 3 repetições de 30 s. Fonte:
+[resultados/carga/resumo.md](resultados/carga/resumo.md).
+
+| Técnica | Antes → depois | Throughput | p95 | Seção |
+|---|---|---:|---:|---|
+| Cache Redis | sem cache → cache com HIT | 7.311 → 17.373 req/s (2,4×) | 32,62 → 10,24 ms | [3.7](#37-resultados-sob-carga) |
+| Consultas | LAZY (41 SQLs) → JOIN FETCH (2) / SQL nativo (1) | 725 → 3.005 / 3.496 req/s (4,1× / 4,8×) | 221,71 → 66,24 / 57,36 ms | [4.2](#42-consultas-otimizadas) |
+| Índice | sem índice → `idx_pedido_cliente_data` | 1.003 → 6.816 req/s (6,8×) | 177,14 → 35,29 ms | [4.3](#43-índices) |
+
+Nenhuma das 132 rodadas teve erro.
+
+## 1. Introdução
+
+A aplicação é uma API REST, sem frontend, de um sistema de vendas: **clientes** fazem **pedidos**, e cada pedido
+tem **itens** que referenciam **produtos**. A base tem 100 mil pedidos e cerca de 300 mil itens.
+
+O objetivo é aplicar três técnicas de otimização e medir o efeito de cada uma: **cache** com Redis; **consultas ao
+banco** (LAZY e EAGER, N+1, JOIN FETCH, SQL nativo e índices); e **testes de desempenho** com k6, de 10 a 200
+usuários simultâneos.
+
+O trabalho responde à pergunta central do enunciado: **"Como demonstrar, por meio de evidências, que uma mudança
+realmente melhorou o desempenho de um sistema?"** Cada técnica seguiu o mesmo método:
+**identificar o problema → implementar uma alternativa → medir → comparar → justificar.** As duas versões de cada
+caso ficam lado a lado na API (sem e com cache, LAZY e JOIN FETCH, sem e com índice), devolvem o mesmo resultado e
+são medidas por scripts reproduzíveis. Todas as tabelas e gráficos saem dos arquivos gerados por esses scripts.
+
+## 2. Arquitetura e tecnologias
+
+### 2.1. Visão geral
+
+```mermaid
+flowchart LR
+    subgraph api["API Spring Boot (127.0.0.1:8080)"]
+        ctrl["controller"] --> svc["service"]
+        svc --> repo["repository (JPA / Hibernate)"]
+    end
+    cliente["k6 / Postman / curl"] -->|"HTTP JSON"| ctrl
+    svc -.->|"@Cacheable / @CacheEvict"| redis[("Redis 8: cache de produtos")]
+    repo -->|"JDBC, pool Hikari de 10"| pg[("PostgreSQL 17")]
 ```
-Edite o `.env` e troque todas as senhas `troque-esta-senha`. O mesmo arquivo é lido pelo Docker Compose
-e pela aplicação Spring Boot. Se as portas `5433` (PostgreSQL) ou `6379` (Redis) já estiverem em uso,
-altere `POSTGRES_PORT` ou `REDIS_PORT`.
 
-### 2. Subir o PostgreSQL e o Redis
-```bash
-docker compose up -d
-docker compose ps        # aguarde postgres e redis ficarem "healthy"
-```
-As portas ficam publicadas somente em `127.0.0.1`.
+O cache fica na camada de serviço: um HIT responde sem abrir transação e sem ocupar conexão do pool; um MISS
+consulta o PostgreSQL e grava o resultado no Redis.
 
-### 3. Executar a API
-```bash
-./mvnw spring-boot:run
-```
+### 2.2. Tecnologias
 
-### 4. Verificar a saúde da aplicação
-```bash
-curl -s http://localhost:8080/actuator/health
-```
-O resultado esperado é `"status":"UP"`, com os componentes `db` e `redis` também `UP`.
+| Tecnologia | Versão | Por quê |
+|---|---|---|
+| Java | 21 | versão LTS; `record` para os DTOs |
+| Spring Boot | 4.1.2 | Web MVC, Data JPA, Cache, Validation e Actuator integrados |
+| Hibernate (JPA) | 7.4.13 | o framework de persistência da aula de LAZY, EAGER e N+1 |
+| PostgreSQL | 17 | `EXPLAIN (ANALYZE, BUFFERS)` e estatísticas de uso de índice |
+| Redis | 8 | cache em memória, fora da JVM, com TTL por chave (seção 3.3) |
+| HikariCP | 7.0.2 | pool de conexões padrão do Spring Boot, com métricas |
+| Grafana k6 | 2.4.0 | testes de carga em código, com p95 e p99 nativos (seção 5.1) |
+| Docker Compose | v2 | PostgreSQL e Redis reproduzíveis |
+| JUnit 6, Mockito, AssertJ | — | testes funcionais |
 
-### Recriar o banco do zero
-Os scripts de `db/init/` só são executados quando o volume do PostgreSQL está vazio. Para recriar:
-```bash
-docker compose down -v
-docker compose up -d
-```
+### 2.3. Camadas e entidades
 
-## Banco de dados e volume
+Pacote `br.uva.pedidos`: `controller` (rotas, sem regra de negócio) → `service` (regras, transações e cache) →
+`repository` (Spring Data JPA, JPQL, projeções em DTO). As entidades (`Cliente`, `Produto`, `Pedido`,
+`ItemPedido`, e `PedidoEager` só para o experimento) nunca saem da API: entrada e saída usam `record`s em `dto`.
+`config` tem o cache e a contagem de SQL; `exception` converte todos os erros em `ProblemDetail` (RFC 9457).
 
-### Modelo
+Toda resposta de `/api/**` traz o header **`X-SQL-Count`**, com a quantidade de SQLs da requisição. É a medida de
+"acessos ao banco" dos experimentos.
+
+### 2.4. Banco de dados e volume
 
 ```mermaid
 erDiagram
@@ -83,18 +127,10 @@ erDiagram
     }
 ```
 
-- `pedido.status`: `PENDENTE`, `APROVADO` ou `CANCELADO`.
-- `pedido.valor_total` = Σ(`quantidade` × `preco_unitario`) dos itens.
-- `item_pedido.preco_unitario` guarda o preço praticado no pedido, que pode diferir do preço atual do produto.
+Schema e dados são criados só por SQL ([db/init/](db/init/)). A carga é determinística (`setseed(0.42)`, data de
+referência fixa), leva cerca de 9 s e sempre produz o checksum `100000 | 1545590410.75`. Fonte:
+[resultados/volume-dados.txt](resultados/volume-dados.txt).
 
-### Scripts de inicialização (`db/init/`, executados em ordem pelo container)
-| Script | Função |
-|---|---|
-| `01_usuario_app.sh` | Cria o usuário da aplicação, com permissão apenas de leitura e escrita de dados (sem DDL). |
-| `02_schema.sql` | Cria as tabelas, as restrições e o índice `idx_item_pedido_pedido`. |
-| `03_dados.sql` | Popula o banco de forma reproduzível (`setseed(0.42)`, data de referência fixa). |
-
-### Volume gerado
 | Tabela | Linhas | Tamanho total |
 |---|---:|---:|
 | cliente | 10.000 | 1,9 MB |
@@ -102,368 +138,305 @@ erDiagram
 | pedido | 100.000 | 9,3 MB |
 | item_pedido | 299.702 | 30 MB |
 
-- 1 a 5 itens por pedido (média 3).
-- Pedidos por cliente: mediana 9 e máximo 225 (distribuição desigual de propósito, para o experimento de índices).
-- Status: ~60% aprovados, ~25% pendentes, ~15% cancelados.
-- A carga leva cerca de 9 s. Os volumes podem ser ajustados nas variáveis `\set` no topo de `03_dados.sql`.
+Os pedidos se distribuem de forma desigual: o cliente **1** tem 225 pedidos e o **545** tem 9 (a mediana).
+Índices iniciais: chaves primárias, `cliente.email` (UNIQUE) e `item_pedido.pedido_id`. O `pedido.cliente_id`
+fica **sem índice** de propósito: é o "antes" do experimento de índices.
 
-Índices existentes após a carga: as chaves primárias, `cliente.email` (UNIQUE) e `idx_item_pedido_pedido`.
-Não há índice em `pedido.cliente_id` nem em `pedido.data_pedido`: essa ausência é o ponto de partida do
-experimento de índices.
+### 2.5. Endpoints
 
-**Limitação conhecida:** as datas de pedido e de cadastro do cliente foram sorteadas de forma independente,
-então alguns pedidos têm data anterior ao cadastro do cliente. Pela mesma razão, um pedido gerado pode ter
-o mesmo produto em dois itens; a API não permite isso em pedidos novos. Nenhum dos dois casos afeta os
-experimentos de desempenho.
-
-### Validar os dados
-```bash
-set -a; . ./.env; set +a
-PGPASSWORD=$APP_DB_PASSWORD psql -h 127.0.0.1 -p $POSTGRES_PORT -U $APP_DB_USER -d $POSTGRES_DB \
-  -f db/validacao_dados.sql > resultados/volume-dados.txt
-```
-O script mostra as contagens, as distribuições, as verificações de integridade (todas devem ser 0),
-o checksum de reprodutibilidade e o tamanho das tabelas e dos índices. A saída da carga atual está em
-[resultados/volume-dados.txt](resultados/volume-dados.txt).
-
-## Endpoints
-
-| Método | Rota | Resposta de sucesso |
+| Método | Rota | Sucesso |
 |---|---|---|
-| POST | `/api/clientes` | 201 + `Location` + `ClienteDTO` |
-| GET | `/api/clientes/{id}` | 200 `ClienteDTO` |
-| GET | `/api/clientes/{id}/pedidos?page=0&size=20` | 200 lista de `PedidoResumoDTO`, do mais recente para o mais antigo (`size` de 1 a 100) |
-| POST | `/api/produtos` | 201 + `Location` + `ProdutoDTO` |
-| GET | `/api/produtos/{id}/sem-cache` | 200 `ProdutoDTO`, sempre consultando o banco |
-| GET | `/api/produtos/{id}/com-cache` | 200 `ProdutoDTO`, consultando o Redis primeiro |
-| PUT | `/api/produtos/{id}` | 200 `ProdutoDTO` (nome, descrição, preço, ativo); invalida o cache do produto |
-| POST | `/api/pedidos` | 201 + `Location` + `PedidoDTO` |
-| GET | `/api/pedidos/{id}` | 200 `PedidoDTO` com cliente e itens |
-| PATCH | `/api/pedidos/{id}/status` | 200 `PedidoDTO` |
+| POST | `/api/clientes` | 201 + `Location` |
+| GET | `/api/clientes/{id}` | 200 |
+| GET | `/api/clientes/{id}/pedidos?page=0&size=20` | 200, do mais recente ao mais antigo (experimento de índices) |
+| POST | `/api/produtos` | 201 + `Location` |
+| GET | `/api/produtos/{id}/sem-cache` | 200, sempre consulta o banco (cenário A) |
+| GET | `/api/produtos/{id}/com-cache` | 200, consulta o Redis primeiro (cenário B) |
+| GET | `/api/produtos/{id}/com-cache-sync` | 200, variante com `@Cacheable(sync = true)` |
+| PUT | `/api/produtos/{id}` | 200, invalida o cache do produto |
+| POST | `/api/pedidos` | 201 + `Location` |
+| GET | `/api/pedidos/{id}` | 200, pedido com cliente e itens (1 SQL) |
+| PATCH | `/api/pedidos/{id}/status` | 200 |
+| GET | `/api/experimentos/pedidos/{lazy,eager,eager/{id},join-fetch,nativa,resumo-lazy,resumo-eager}?limite=1..1000` | 200, somente leitura (seção 4) |
 
-Rotas de experimento (somente leitura, fora da API de negócio): `GET /api/experimentos/pedidos/{lazy, eager,
-eager/{id}, join-fetch, nativa, resumo-lazy, resumo-eager}?limite=1..1000`. Ver "Comparação LAZY e EAGER".
+A coleção [postman/A2.postman_collection.json](postman/A2.postman_collection.json) tem 47 requisições, com casos
+de sucesso e de erro.
 
-Exemplo de criação de pedido (o preço unitário não é enviado: o servidor copia o preço atual do produto):
-```bash
-curl -i -X POST http://localhost:8080/api/pedidos -H 'Content-Type: application/json' \
-  -d '{"clienteId":545,"itens":[{"produtoId":10,"quantidade":2},{"produtoId":20,"quantidade":1}]}'
-```
+### 2.6. Regras de negócio
 
-Toda resposta de `/api/**`, inclusive as de erro, traz o header `X-SQL-Count` com a quantidade de SQLs que a
-requisição executou.
+- O pedido exige cliente existente (404) e pelo menos um item, com quantidade de 1 a 1000 (400).
+- Cada produto deve existir (404), estar ativo e aparecer uma vez no pedido (422).
+- O preço unitário é copiado do produto pelo servidor; reajustes posteriores não alteram pedidos feitos.
+- `valorTotal` = Σ(quantidade × preço unitário), calculado pela entidade `Pedido`.
+- Todo pedido começa PENDENTE; só valem PENDENTE → APROVADO e PENDENTE → CANCELADO (409).
+- O email do cliente é único, inclusive sob requisições simultâneas (409).
 
-Os erros seguem o formato `ProblemDetail` (RFC 9457). Os erros de validação trazem a lista de campos inválidos:
-```json
-{"detail":"Dados de entrada inválidos","instance":"/api/pedidos","status":400,"title":"Bad Request",
- "erros":[{"campo":"itens[0].quantidade","mensagem":"deve ser maior que 0"}]}
-```
-Nenhuma resposta de erro expõe SQL, nomes de tabelas, stack traces ou classes internas. Erros inesperados
-retornam 500 com uma mensagem genérica, e o detalhe fica só no log do servidor.
+### 2.7. Decisões de segurança
 
-A coleção [postman/A2.postman_collection.json](postman/A2.postman_collection.json) tem os casos de sucesso
-e de erro de cada recurso, com testes de status, e usa os IDs da base gerada (cliente 1, que tem muitos
-pedidos, e cliente 545, típico).
+- **Usuário da aplicação sem DDL** (só SELECT, INSERT, UPDATE e DELETE); tabelas e índices são criados pelo admin.
+- **Segredos só no `.env`**, fora do controle de versão; o repositório traz o `.env.example`.
+- **Portas só em `127.0.0.1`**; todos os testes de carga rodaram na máquina local.
+- **Serializador tipado no Redis:** só reconstrói `ProdutoDTO`, então quem escrever no Redis não consegue forçar
+  a desserialização de outra classe.
+- **Erros sem dados internos:** nenhuma resposta expõe SQL, nomes de tabela, classes ou stack trace (15 casos
+  conferidos por `ErrosApiTest`).
+- **`statement_timeout` de 10 s** na conexão da aplicação.
 
-## Regras de negócio
+As demais decisões, com o motivo de cada uma, estão em [docs/decisoes-tecnicas.md](docs/decisoes-tecnicas.md).
 
-| # | Regra | Resposta quando violada |
-|---|---|---|
-| 1 | O pedido exige um cliente existente. | 404 |
-| 2 | O pedido exige pelo menos um item. | 400 |
-| 3 | A quantidade de cada item deve ser maior que zero (máximo 1000). | 400 |
-| 4 | O produto deve existir, estar ativo e aparecer uma única vez no pedido. | 404 se não existe; 422 se inativo ou repetido |
-| 5 | O preço unitário do item é o preço atual do produto, copiado pelo servidor. Reajustes posteriores não alteram pedidos já feitos. | — |
-| 6 | `valorTotal` = Σ(quantidade × preço unitário), calculado pela entidade `Pedido`. | — |
-| 7 | Todo pedido começa como PENDENTE. Só são válidas as transições PENDENTE → APROVADO e PENDENTE → CANCELADO. | 409 |
-| 8 | O email do cliente é único, inclusive sob requisições simultâneas, porque o UNIQUE do banco também é tratado. | 409 |
-| 9 | O preço do produto deve ser maior que zero, com no máximo 2 casas decimais. | 400 |
+## 3. Implementação de cache
 
-As regras ficam nos services e nas entidades, nunca nos controllers. A regra de status existe num único
-lugar: `StatusPedido.podeMudarPara`, usada por `Pedido.alterarStatus`.
+### 3.1. Dado escolhido
 
-## Implementação de cache
+O dado em cache é o **detalhe do produto** (`ProdutoDTO`: nome, descrição, preço e situação):
 
-### O que foi colocado em cache e por quê
-O dado em cache é o detalhe do produto (`ProdutoDTO`: nome, descrição, preço e situação), lido por
-`GET /api/produtos/{id}/com-cache`. Os critérios da seção 3.1 do enunciado:
-
-| Critério | Avaliação |
+| Critério (3.1) | Avaliação |
 |---|---|
-| Frequência de acesso | Alta: é a leitura típica de um catálogo, consultada por todo cliente que navega. |
-| Volatilidade | Média: o preço muda por reajuste, mas muito menos do que é lido. |
-| Custo de recuperação | Baixo por consulta (busca pela chave primária), mas repetido a cada visualização. |
-| Consequência de dado desatualizado | Só de exibição: o pedido sempre lê o preço do banco (ver abaixo). |
-| Invalidação | Simples e precisa: um produto só muda pelo `PUT /api/produtos/{id}`, que invalida a chave dele. |
+| Frequência de acesso | Alta: leitura típica de catálogo, feita por todo cliente que navega. |
+| Volatilidade | Média: o preço muda por reajuste, mas é lido muito mais vezes do que muda. |
+| Custo de recuperação | Baixo por consulta (chave primária), mas repetido a cada visualização. |
+| Consequência de dado desatualizado | Só de exibição: a criação de pedido lê o preço do banco. |
+| Invalidação | Simples: o produto só muda pelo `PUT /api/produtos/{id}`, que remove a chave dele. |
 
-Estoque, saldo ou status do pedido ficaram fora do cache, porque têm volatilidade alta e servem de base
-para decisões (na tabela da aula: "evitar cache como fonte de decisão").
+Estoque, saldo e status do pedido ficaram fora: têm volatilidade alta e servem de base para decisões.
 
-### Tecnologia: Redis
-O Redis é um armazenamento chave-valor em memória, externo à aplicação, com expiração nativa por chave
-(TTL). Foi escolhido em vez do Caffeine porque fica fora da JVM: o cache sobrevive a reinícios da API, é
-compartilhado se houver várias instâncias e pode ser inspecionado com `redis-cli` durante a demonstração.
-O custo é uma ida à rede a cada consulta, que o experimento mede.
+### 3.2. Cenários A e B
 
-Integração pela abstração de cache do Spring (`@Cacheable` e `@CacheEvict`), no padrão da aula:
+As duas versões ficam no `ProdutoService`, com a mesma consulta (`buscarDTO`, projeção JPQL em DTO):
 
 ```java
-// Cenário A: consulta o banco a cada chamada.
+// Cenário A: GET /api/produtos/{id}/sem-cache, consulta o banco a cada chamada.
 @Transactional(readOnly = true)
 public ProdutoDTO buscarProduto(Long id) {
     return produtoRepository.buscarDTO(id).orElseThrow(() -> naoEncontrado(id));
 }
 
-// Cenário B: mesma consulta, mas o resultado fica no Redis até o TTL ou o próximo PUT.
+// Cenário B: GET /api/produtos/{id}/com-cache, o resultado fica no Redis até o TTL ou o próximo PUT.
 @Cacheable(value = "produtos", key = "#id")
 @Transactional(readOnly = true)
-public ProdutoDTO buscarProdutoComCache(Long id) {
-    return produtoRepository.buscarDTO(id).orElseThrow(() -> naoEncontrado(id));
-}
+public ProdutoDTO buscarProdutoComCache(Long id) { ... mesma consulta ... }
 
 @CacheEvict(value = "produtos", key = "#id")
 @Transactional
 public ProdutoDTO atualizar(Long id, ProdutoRequest request) { ... }
 ```
 
-Configuração (`config/CacheConfig.java`):
-- **TTL de 5 minutos** (`CACHE_TTL_PRODUTOS`), dentro da faixa de 1 a 5 min sugerida na aula para catálogo de preços.
-- **Chave** `produtos::{id}` e **valor em JSON legível**, gravado por um serializador tipado que só reconstrói
-  `ProdutoDTO`. O serializador genérico grava o nome da classe no valor, e quem conseguisse escrever no Redis
-  poderia forçar a desserialização de classes arbitrárias.
-- **Sem valores nulos**: produto inexistente responde 404 e nunca vai para o cache.
-- **Invalidação depois do commit e síncrona**: a chave só é removida depois que a alteração é gravada no banco,
-  e já foi removida quando o PUT responde. O Spring Data Redis 4.1 grava de forma assíncrona por padrão, por isso
-  a gravação síncrona foi ligada explicitamente.
-- **Proxy de cache por fora da transação**: um HIT responde sem abrir transação e sem ocupar conexão do pool do banco.
-- **Tolerância a falha do Redis**: se o Redis cair, a API registra um aviso e consulta o banco (responde 200, não 500).
-  O timeout de 500 ms limita esse custo: com o Redis parado, uma consulta com cache levou cerca de 1 s.
+Diferente da aula, o `@CacheEvict` fica no próprio `atualizar`: um `invalidarCache` chamado com `this.` dentro do
+service passaria por fora do proxy do Spring e não invalidaria nada.
 
-### Experimento obrigatório
-Script reproduzível: [scripts/experimento-cache.sh](scripts/experimento-cache.sh). A saída completa está em
-[resultados/cache/experimento-cache.txt](resultados/cache/experimento-cache.txt).
+### 3.3. Tecnologia: Redis
 
-```bash
-CACHE_TTL_PRODUTOS=10s SQL_LOG_LEVEL=info ./mvnw spring-boot:run   # TTL curto só para ver a expiração
-scripts/experimento-cache.sh
-```
+Armazenamento chave-valor em memória, com expiração por chave. Foi escolhido em vez do Caffeine (cache local)
+porque fica fora da JVM: sobrevive a reinícios da API, serve a várias instâncias e pode ser inspecionado com
+`redis-cli`. O custo é uma ida à rede por consulta.
 
-| Passo | Requisição | X-SQL-Count | Estado no Redis | Resultado |
-|---|---|---:|---|---|
-| 1 | GET `/sem-cache` (2×) | 1 e 1 | chave não existe | sem cache, sempre consulta o banco |
-| 2 | GET `/com-cache` | 1 | chave criada, TTL 10 s | MISS |
-| 3 | GET `/com-cache` | **0** | chave existe | HIT, mesmo corpo do passo 2 |
-| 4 | PUT preço 1419,87 → 1519,87 | 2 | **chave removida** | invalidação |
-| 5 | GET `/com-cache` (2×) | 1 e 0 | chave recriada | MISS com o preço novo, depois HIT |
-| 6 | aguardar o TTL, depois GET `/com-cache` | 1 | expirou sozinha | MISS por expiração |
-| 7 | UPDATE direto no banco, depois GET `/com-cache` | 0 | chave antiga | **HIT com preço desatualizado** |
-| 7 | POST `/api/pedidos` com o mesmo produto | — | — | preço cobrado é o do banco |
-| 9 | GET `/com-cache` do produto 8 (preço 788,60) | 1 e 0 | `"preco":788.60` | escala do `BigDecimal` preservada |
-| 10 | GET `/com-cache` de produto inexistente | 1 | nenhuma chave criada | 404, nada vai para o cache |
-| 11 | `redis-cli MONITOR` durante um MISS e um HIT | 1 e 0 | — | comandos `GET`, `SET ... PX`, `GET` |
-
-Nos passos 3 e 9, o corpo de `/com-cache` (HIT) é comparado **byte a byte** com o de `/sem-cache` (`cmp`) e é
-idêntico. Isso confirma que a ida e a volta pelo Redis não alteram o JSON nem a escala dos preços.
-
-Comandos que a aplicação envia ao Redis (passo 11; o `AUTH` nunca aparece no `MONITOR`):
-```
-"GET" "produtos::20"                                          <- MISS: chave não existe
-"SET" "produtos::20" "{\"id\":20,...,\"preco\":1236.44,...}" "PX" "10000"   <- grava com TTL (10 s no experimento)
-"GET" "produtos::20"                                          <- HIT: devolve o JSON, sem SQL
-```
-
-As métricas do Actuator (`/actuator/metrics/cache.gets?tag=result:hit` e `result:miss`) acompanham os
-contadores a cada passo. O script restaura o preço original e remove o pedido que criou, então a base
-continua idêntica à gerada.
-
-Comparação sequencial (1 cliente, 200 produtos distintos, JVM aquecida):
-
-| Cenário | Média | p50 | p95 | SQLs / 200 requisições |
-|---|---:|---:|---:|---:|
-| A — sem cache | 2,46 ms | 2,40 ms | 2,90 ms | 200 |
-| B — com cache, MISS (cache vazio) | 3,66 ms | 3,50 ms | 4,30 ms | 200 |
-| B — com cache, HIT (cache cheio) | 2,11 ms | 2,10 ms | 2,40 ms | **0** |
-
-Esses números medem um único usuário. O comportamento sob carga (10 a 200 usuários simultâneos) entra nos
-testes de desempenho com k6.
-
-### Questões da seção 3.5
-1. **Em quais situações o cache trouxe maior benefício?** Em leituras repetidas do mesmo produto (HIT): zero
-   acesso ao banco e a menor latência e variação (p95 de 2,40 ms contra 2,90 ms). O ganho de tempo com um único
-   usuário é pequeno, porque a consulta por chave primária já é barata. O ganho maior é tirar carga do banco e do
-   pool de conexões, o que pesa sob concorrência.
-2. **Como a volatilidade influenciou o TTL?** O preço tem volatilidade média e é invalidado a cada PUT, então o
-   TTL não é o mecanismo principal de atualização. Ele é a proteção contra escritas que não passam pela API
-   (passo 7). Com 5 minutos, um dado desatualizado dura no máximo isso, dentro do sugerido para catálogo de preços.
-3. **Quais os riscos de dados desatualizados?** Exibir um preço que não é mais o vigente. Isso acontece se
-   alguém alterar o banco por fora da API, se o Redis estiver fora do ar no momento da invalidação, ou numa corrida
-   em que uma leitura antiga grava no cache logo depois do evict. Nos três casos o TTL limita a duração. O valor
-   cobrado não é afetado, porque a criação de pedido lê o preço com `findAllById`, direto do banco (passo 7).
-4. **O cache sempre melhorou o desempenho?** Não. No MISS ele é **mais lento** que o cenário sem cache (3,66 ms
-   contra 2,46 ms), porque soma a consulta ao banco, o GET que não encontrou nada e o SET no Redis. Com o Redis fora
-   do ar, cada consulta com cache passa a esperar o timeout. O cache só compensa quando a taxa de HIT é alta, ou
-   seja, dados lidos muitas vezes entre duas alterações.
-
-## Comparação LAZY e EAGER
-
-### Como o experimento foi montado
-O relacionamento estudado é Pedido → Itens (`@OneToMany`), com Pedido → Cliente (`@ManyToOne`). Como um
-mapeamento JPA só aceita um `FetchType`, existem duas entidades sobre a mesma tabela `pedido`:
+### 3.4. TTL e invalidação
 
 ```java
-@Entity @Table(name = "pedido")             // usada pela API e pelos experimentos LAZY
+RedisCacheConfiguration produtos = RedisCacheConfiguration.defaultCacheConfig()
+    .entryTtl(ttlProdutos)                      // CACHE_TTL_PRODUTOS, padrão 5 min
+    .disableCachingNullValues()                 // produto inexistente responde 404 e não vai para o cache
+    .serializeValuesWith(SerializationPair.fromSerializer(new JacksonJsonRedisSerializer<>(ProdutoDTO.class)));
+RedisCacheWriter escritor = RedisCacheWriter.create(conexao, config -> config.immediateWrites());
+return RedisCacheManager.builder(escritor).withCacheConfiguration("produtos", produtos)
+    .transactionAware().enableStatistics().build();
+```
+
+- **TTL de 5 minutos**, na faixa de 1 a 5 min que a aula sugere para catálogo de preços.
+- **Invalidação após o commit e síncrona:** `transactionAware()` adia a remoção até o commit; `immediateWrites()`
+  a torna síncrona (no Spring Data Redis 4.1 ela é assíncrona por padrão). Quando o PUT responde, a chave já saiu.
+- **Proxy de cache por fora da transação** (`@EnableCaching(order = HIGHEST_PRECEDENCE)`): um HIT não abre
+  transação nem ocupa conexão do pool.
+- **Degradação:** com o Redis fora do ar, um `CacheErrorHandler` registra um aviso e a API consulta o banco (200,
+  não 500), com custo de cerca de 1 s por consulta (timeout de 500 ms).
+
+### 3.5. Experimento obrigatório
+
+[scripts/experimento-cache.sh](scripts/experimento-cache.sh), com a API em `CACHE_TTL_PRODUTOS=10s` para ver a
+expiração. Fonte: [resultados/cache/experimento-cache.txt](resultados/cache/experimento-cache.txt). Os passos
+extras (escala do preço, 404, `redis-cli MONITOR`) estão no [apêndice A](docs/apendice-experimentos.md#a-cache-experimento-passo-a-passo).
+
+| Passo do enunciado | Requisição | X-SQL-Count | Redis | Resultado |
+|---|---|---:|---|---|
+| 1. Consultar e registrar | GET `/com-cache` | 1 | chave criada, TTL 10 s | MISS |
+| 2. Repetir a consulta | GET `/com-cache` | 0 | chave existe | HIT, corpo idêntico byte a byte ao do `/sem-cache` |
+| 3. Modificar pela aplicação | PUT preço 1419,87 → 1519,87 | 2 | chave removida | invalidação |
+| 4. Consultar de novo | GET `/com-cache` (2×) | 1 e 0 | chave recriada | MISS com o preço novo, depois HIT |
+| 5. Política de expiração | aguardar 10 s, GET `/com-cache` | 1 | expirou sozinha | MISS por expiração |
+| Dado desatualizado | UPDATE direto no banco, GET `/com-cache` | 0 | chave antiga | HIT com o preço antigo |
+| | POST `/api/pedidos` com o mesmo produto | 4 | — | o preço cobrado é o do banco |
+
+As duas últimas linhas mostram o dado desatualizado temporário: uma escrita fora da API não invalida a chave, e o
+preço antigo aparece até o TTL vencer, sem afetar o valor cobrado.
+
+### 3.6. Comparação com um usuário
+
+Passo 8 do mesmo script: 200 produtos distintos, requisições sequenciais, JVM aquecida.
+
+| Cenário | Média | p95 | SQLs em 200 requisições |
+|---|---:|---:|---:|
+| A — sem cache | 2,46 ms | 2,90 ms | 200 |
+| B — MISS (cache vazio) | 3,66 ms | 4,30 ms | 200 |
+| B — HIT (cache cheio) | 2,11 ms | 2,40 ms | 0 |
+
+Com um usuário, o HIT é só 14% mais rápido na média, porque a busca por chave primária já é barata. O MISS é 49%
+mais lento que não ter cache: soma a consulta, o GET que falhou e o SET.
+
+### 3.7. Resultados sob carga
+
+Cenário 1 do k6 ([seção 5](#5-testes-de-desempenho)), id sorteado entre os 901 produtos ativos. **HIT:** Redis
+pré-carregado antes de cada repetição (taxa de HIT medida: 100,0%). **MISS contínuo:** API com TTL de 1 ms (taxa
+de HIT de 0,7% a 0,9%). Fonte: [resumo.md](resultados/carga/resumo.md).
+
+| VUs | Sem cache: req/s · p95 | HIT: req/s · p95 | MISS: req/s · p95 | Pendentes no pool (sem cache) |
+|---:|---|---|---|---:|
+| 10 | 8.011 · 1,76 ms | 13.638 · 0,94 ms | 4.437 · 3,07 ms | 0 |
+| 50 | 7.390 · 14,28 ms | 17.109 · 4,93 ms | 5.058 · 16,11 ms | 38 |
+| 100 | 7.311 · 32,62 ms | 17.373 · 10,24 ms | 5.455 · 35,76 ms | 86 |
+| 200 | 5.661 · 94,22 ms | 13.953 · 27,99 ms | 5.446 · 80,83 ms | 187 |
+
+Sem cache, há de 1,009 a 1,046 transação no banco por requisição; com HIT, 0,000, nenhuma conexão do pool ativa e
+a CPU do PostgreSQL cai de cerca de 180% para 1%.
+
+![Latência p95 por nível de carga, cenário de cache](resultados/graficos/cache_p95.png)
+
+*A distância entre "sem cache" e HIT cresce com a carga: sem cache, as requisições fazem fila no pool.*
+
+![Throughput por nível de carga, cenário de cache](resultados/graficos/cache_throughput.png)
+
+*O HIT sustenta 2,4 vezes o throughput do sem cache com 100 VUs; o MISS fica abaixo do sem cache em todos os níveis.*
+
+**Partida a frio e efeito manada.** Com o Redis vazio (`FLUSHDB` antes da rodada), requisições simultâneas ao
+mesmo produto encontram a chave ausente e vão todas ao banco. "MISS redundantes" são os MISS além do primeiro de
+cada chave. A variante `/com-cache-sync` (`@Cacheable(sync = true)`) foi medida nas mesmas condições:
+
+| VUs | 10 | 50 | 100 | 200 |
+|---|---:|---:|---:|---:|
+| MISS redundantes, `@Cacheable` | 6 | 37 | 64 | 128 |
+| MISS redundantes, `@Cacheable(sync = true)` | 7 | 38 | 66 | 137 |
+
+![MISS redundantes na partida a frio, com e sem sync](resultados/graficos/cache_partida_frio.png)
+
+*As barras de cada nível são praticamente iguais: o `sync = true` não reduziu o efeito manada.*
+
+A premissa de que o `sync` "trava por instância da JVM" não vale nesta versão: o Spring delega o `sync` ao
+provedor, e o `RedisCache` do Spring Data Redis 4.1, com o writer padrão, não usa trava nenhuma (conferido no
+bytecode; [apêndice A](docs/apendice-experimentos.md#por-que-sync--true-não-sincroniza-nesta-versão)). Na
+prática, o efeito manada custou cerca de 1.000 MISS numa rodada de 30 s com 99,8% de HIT.
+
+### 3.8. Questões da seção 3.5
+
+**1. Em quais situações o cache apresentou maior benefício?**
+Em leituras repetidas com HIT e carga alta: com 100 a 200 VUs, o throughput foi de 2,4 a 2,5 vezes o do sem
+cache e o p95 caiu de 3,2 a 3,4 vezes. O ganho vem de tirar o banco do caminho (0 transações por requisição,
+nenhuma conexão do pool). Com um usuário, o ganho foi de só 14% (2,46 → 2,11 ms): o benefício cresce com a
+concorrência.
+
+**2. Como a volatilidade dos dados influenciou a escolha do TTL?**
+O preço tem volatilidade média, e toda alteração pela API já invalida a chave. O TTL só limita a vida de um dado
+alterado por fora da API, e 5 minutos ficam dentro do sugerido para catálogo de preços. No outro extremo, com TTL
+de 1 ms o cache nunca acerta e o desempenho fica pior que sem cache.
+
+**3. Quais são os riscos de utilizar informações desatualizadas?**
+Exibir um preço que não é mais o vigente. Acontece se o banco for alterado por fora da API (demonstrado no
+experimento), se o Redis estiver fora do ar na invalidação, ou numa corrida em que uma leitura antiga grava no
+cache logo depois do evict. Nos três casos, o TTL limita a duração a 5 minutos. O valor cobrado não é afetado,
+porque a criação de pedido lê o preço do banco (`findAllById`).
+
+**4. O cache sempre melhorou o desempenho? Justifique com os resultados observados.**
+Não. No **MISS**, a latência média foi 1,86 vez a do sem cache com 10 VUs, 1,34 com 100 e 1,04 com 200, e o
+throughput ficou abaixo em todos os níveis (4.437 × 8.011 req/s com 10 VUs). Com o **Redis fora do ar**, cada
+consulta espera o timeout (cerca de 1 s). Na **partida a frio**, o efeito manada gera consultas redundantes que o
+`sync = true` não evitou. O cache só compensa com taxa de HIT alta: dados lidos muitas vezes entre duas alterações.
+
+## 4. Otimização das consultas
+
+### 4.1. LAZY × EAGER
+
+Relacionamentos estudados: Pedido → Itens (`@OneToMany`) e Pedido → Cliente (`@ManyToOne`). Como um mapeamento só
+aceita um `FetchType`, há duas entidades sobre a mesma tabela; o `Pedido` da API continua LAZY.
+
+```java
+@Entity @Table(name = "pedido")             // usada pela API e pelo experimento LAZY
 public class Pedido {
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    private Cliente cliente;
-    @OneToMany(mappedBy = "pedido", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
-    private List<ItemPedido> itens;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false) private Cliente cliente;
+    @OneToMany(mappedBy = "pedido", fetch = FetchType.LAZY, cascade = CascadeType.ALL) private List<ItemPedido> itens;
 }
 
 @Entity @Immutable @Table(name = "pedido")  // somente leitura, só para o experimento EAGER
 public class PedidoEager {
-    @ManyToOne(fetch = FetchType.EAGER, optional = false)
-    private Cliente cliente;
-    @OneToMany(fetch = FetchType.EAGER)
-    @JoinColumn(name = "pedido_id", insertable = false, updatable = false)
+    @ManyToOne(fetch = FetchType.EAGER, optional = false) private Cliente cliente;
+    @OneToMany(fetch = FetchType.EAGER) @JoinColumn(name = "pedido_id", insertable = false, updatable = false)
     private List<ItemPedido> itens;
 }
 ```
 
-Todas as estratégias, em `/api/experimentos/pedidos/*`, devolvem os mesmos `limite` primeiros pedidos por
-`id`, no mesmo formato (`PedidoExperimentoDTO`: pedido, nome do cliente e itens). O script confere que o JSON
-de LAZY, EAGER, JOIN FETCH e nativa é **idêntico** em todos os limites. A diferença entre elas está só em
-como os dados chegam do banco.
+As rotas `/api/experimentos/pedidos/*` devolvem os `limite` primeiros pedidos com cliente e itens; o JSON de
+LAZY, EAGER, JOIN FETCH e nativa é **idêntico** em todos os limites (conferido pelo script). O `open-in-view` está
+desligado, para que o LAZY não seja carregado escondido na serialização.
 
-| Rota | Estratégia |
-|---|---|
-| `/lazy?limite=N` | `Pedido` (LAZY); `getCliente().getNome()` e `getItens()` acessados no laço de mapeamento |
-| `/eager?limite=N` | `PedidoEager` por consulta de lista (Spring Data, `findAllByOrderByIdAsc(Limit)`) |
-| `/eager/{id}` | `PedidoEager` por `findById` |
-| `/join-fetch?limite=N` | `Pedido` em 2 passos: ids dos N primeiros, depois `JOIN FETCH p.cliente JOIN FETCH p.itens WHERE p.id IN :ids` |
-| `/nativa?limite=N` | uma consulta SQL nativa com linhas planas, agrupadas em Java com `LinkedHashMap` |
-| `/resumo-lazy?limite=N` | grid da aula (pedido, cliente, valor), sem itens, com `Pedido` |
-| `/resumo-eager?limite=N` | o mesmo grid com `PedidoEager` |
+**Resultados** ([scripts/experimento-persistencia.sh](scripts/experimento-persistencia.sh), mediana de 5
+requisições após 3 de aquecimento; fonte: [persistencia.txt](resultados/persistencia/persistencia.txt); tabela
+completa no [apêndice B](docs/apendice-experimentos.md#b-lazy-eager-e-consultas-otimizadas-tabela-completa)):
 
-Script: [scripts/experimento-persistencia.sh](scripts/experimento-persistencia.sh). Ele sobe a própria instância
-da API (porta 18080, log de SQL desligado) e faz, para cada estratégia e limite, 3 requisições de aquecimento
-descartadas e 5 medidas. Registra a mediana do tempo, o `X-SQL-Count`, os bytes e a contagem de pedidos e itens.
-Depois sobe a API com log de SQL e salva as consultas geradas com `limite=3`. Resultados em
-[resultados/persistencia/](resultados/persistencia/) (`persistencia.csv`, `persistencia.txt`, `sql-*.txt`).
+| Estratégia | SQLs (10 / 100 / 1000 pedidos) | Mediana (10 / 100 / 1000) |
+|---|---|---|
+| LAZY | 21 / 201 / 1.937 | 12,33 / 48,10 / 237,18 ms |
+| EAGER (consulta de lista) | 21 / 201 / 1.937 | 10,91 / 45,12 / 233,30 ms |
+| JOIN FETCH | 2 / 2 / 2 | 9,64 / 14,69 / 44,89 ms |
+| SQL nativo | 1 / 1 / 1 | 6,43 / 7,84 / 13,13 ms |
+| EAGER por id (`findById`) | 1 (um pedido) | 4,59 ms |
 
-### Resultados (base de 100 mil pedidos)
+O volume recuperado é o mesmo em todas as estratégias: 2.713, 29.391 e 295.258 bytes (26, 299 e 2.995 itens).
 
-| Estratégia | Limite | SQLs | Mediana | Bytes | Pedidos / itens |
-|---|---:|---:|---:|---:|---:|
-| LAZY | 10 | 21 | 12,33 ms | 2.713 | 10 / 26 |
-| EAGER (lista) | 10 | 21 | 10,91 ms | 2.713 | 10 / 26 |
-| JOIN FETCH | 10 | **2** | 9,64 ms | 2.713 | 10 / 26 |
-| Nativa | 10 | **1** | 6,43 ms | 2.713 | 10 / 26 |
-| Grid LAZY | 10 | 11 | 8,07 ms | 943 | 10 / — |
-| Grid EAGER | 10 | 21 | 11,57 ms | 943 | 10 / — |
-| LAZY | 100 | 201 | 48,10 ms | 29.391 | 100 / 299 |
-| EAGER (lista) | 100 | 201 | 45,12 ms | 29.391 | 100 / 299 |
-| JOIN FETCH | 100 | **2** | 14,69 ms | 29.391 | 100 / 299 |
-| Nativa | 100 | **1** | 7,84 ms | 29.391 | 100 / 299 |
-| Grid LAZY | 100 | 101 | 18,54 ms | 9.512 | 100 / — |
-| Grid EAGER | 100 | 201 | 35,44 ms | 9.512 | 100 / — |
-| LAZY | 1000 | 1.937 | 237,18 ms | 295.258 | 1000 / 2995 |
-| EAGER (lista) | 1000 | 1.937 | 233,30 ms | 295.258 | 1000 / 2995 |
-| JOIN FETCH | 1000 | **2** | 44,89 ms | 295.258 | 1000 / 2995 |
-| Nativa | 1000 | **1** | 13,13 ms | 295.258 | 1000 / 2995 |
-| Grid LAZY | 1000 | 937 | 90,42 ms | 96.176 | 1000 / — |
-| Grid EAGER | 1000 | 1.937 | 233,06 ms | 96.176 | 1000 / — |
-| EAGER por id | id=1 | **1** | 4,59 ms | 406 | 1 / 5 |
-
-### Por que o EAGER não garante uma consulta única
-O comportamento observado depende de **como** a entidade é buscada, não só do `FetchType`:
-
-- **`findById` (`/eager/1`): 1 consulta.** O Hibernate monta um único SELECT com `JOIN cliente` e
-  `LEFT JOIN item_pedido` ([sql-eager-por-id.txt](resultados/persistencia/sql-eager-por-id.txt)).
-- **Consulta de lista (`/eager?limite=N`): 1 + N + clientes distintos, exatamente como o LAZY.** O JPQL
-  `SELECT p FROM PedidoEager p ORDER BY p.id` traz só a tabela `pedido`. Como as associações são EAGER, o
-  Hibernate precisa inicializá-las antes de devolver o resultado e dispara um SELECT por cliente e um por coleção
-  de itens ([sql-eager.txt](resultados/persistencia/sql-eager.txt)):
+**N+1 demonstrado.** Com `/lazy?limite=3` ([sql-lazy.txt](resultados/persistencia/sql-lazy.txt)), cada
+`getCliente()` ou `getItens()` do laço de mapeamento dispara um SELECT:
 
 ```
--- SQL 1  select ... from pedido pe1_0 order by pe1_0.id fetch first ? rows only      <- [3]
--- SQL 2  select ... from cliente c1_0 where c1_0.id=?                                  <- [8062]
--- SQL 3  select ... from cliente c1_0 where c1_0.id=?                                  <- [3713]
--- SQL 4  select ... from cliente c1_0 where c1_0.id=?                                  <- [57]
--- SQL 5  select ... from item_pedido i1_0 where i1_0.pedido_id=?                       <- [3]
--- SQL 6  select ... from item_pedido i1_0 where i1_0.pedido_id=?                       <- [2]
--- SQL 7  select ... from item_pedido i1_0 where i1_0.pedido_id=?                       <- [1]
+-- SQL 1  select ... from pedido p1_0 order by p1_0.id fetch first ? rows only    <- [3]
+-- SQL 2  select ... from cliente c1_0 where c1_0.id=?                            <- [8062]  pedido 1: getCliente()
+-- SQL 3  select ... from item_pedido i1_0 where i1_0.pedido_id=?                 <- [1]     pedido 1: getItens()
+-- SQL 4  select ... from cliente c1_0 where c1_0.id=?                            <- [3713]  pedido 2
+-- ...    (mais 3: itens do pedido 2, cliente e itens do pedido 3)
 ```
 
-O EAGER define **quando** carregar (já na consulta) e não **como** (com JOIN). Em consulta de lista, ele
-continua sendo N+1. A única diferença em relação ao LAZY é que as consultas acontecem todas no carregamento,
-mesmo que o dado nunca seja usado.
+São **1 + N (itens) + clientes distintos** consultas: 21 para 10 pedidos e 1.937 para 1000 (1 + 1000 + 936
+clientes distintos; um cliente já carregado é reaproveitado do contexto de persistência).
 
-### Dados desnecessários: o grid de pedidos
-A listagem estilo grid da aula (pedido, cliente, valor) não exibe itens:
+**EAGER em lista: o mesmo N+1**, como o enunciado alerta. Por `findById` (`/eager/1`), o Hibernate faz **1
+consulta** com JOIN ([sql-eager-por-id.txt](resultados/persistencia/sql-eager-por-id.txt)). Numa consulta de
+lista, o JPQL traz só `pedido`, e cada associação EAGER é inicializada com um SELECT separado: **1 + N + clientes
+distintos, como o LAZY** ([sql-eager.txt](resultados/persistencia/sql-eager.txt)). O EAGER define **quando**
+carregar, não **como**.
 
-- **Com LAZY (`/resumo-lazy`):** a coleção nunca é carregada. São 1 + clientes distintos = 937 SQLs para 1000
-  pedidos, em 90 ms.
-- **Com EAGER (`/resumo-eager`):** o Hibernate carrega os 2.995 itens mesmo assim. São 1.937 SQLs e 233 ms, ou
-  seja, **2,6× mais lento para a mesma resposta** (96.176 bytes nos dois casos). É o custo de declarar EAGER um
-  relacionamento que nem toda tela usa.
+**Dados desnecessários: o grid da aula** (pedido, cliente e valor, sem itens). Com LAZY (`/resumo-lazy`), a coleção
+nunca é carregada: 937 SQLs e 90,42 ms para 1000 pedidos. Com EAGER (`/resumo-eager`), o Hibernate carrega os
+2.995 itens mesmo assim: 1.937 SQLs e 233,06 ms, **2,6 vezes mais lento para a mesma resposta**.
 
-### Quando usar cada um
-- **LAZY como padrão**, como recomendado na aula. Ele só busca o que é acessado. O risco é o N+1 quando o código
-  percorre uma lista acessando associações, que se resolve com uma consulta específica (JOIN FETCH, projeção).
-- **EAGER só quando o relacionamento é sempre necessário, pequeno e lido por id.** Como mostrado acima, o EAGER
-  vale para todas as consultas da entidade, inclusive as que não precisam do dado, e em listas vira N+1.
-  Decidir por consulta (JOIN FETCH ou DTO) dá o mesmo resultado sem impor o custo a todas as telas.
+#### Quando usar LAZY ou EAGER (4.3)
 
-## Demonstração de N+1
+- **LAZY como padrão**, como na aula: só busca o que é acessado. Contra o N+1 de uma listagem, a solução é uma
+  consulta específica (JOIN FETCH, projeção em DTO), não trocar o mapeamento.
+- **EAGER só quando a associação é sempre necessária, pequena e lida por id** (um pedido aberto na tela de
+  detalhes). Ele vale para todas as consultas da entidade, inclusive as que não usam o dado, e em listas continua
+  sendo N+1.
 
-`/lazy?limite=3` ([sql-lazy.txt](resultados/persistencia/sql-lazy.txt)). Os SELECTs adicionais aparecem
-**intercalados com o laço** de mapeamento, um a cada acesso a `getCliente()` ou `getItens()`:
+### 4.2. Consultas otimizadas
 
-```
--- SQL 1  select ... from pedido p1_0 order by p1_0.id fetch first ? rows only          <- [3]
--- SQL 2  select ... from cliente c1_0 where c1_0.id=?                                  <- [8062]  pedido 1: getCliente()
--- SQL 3  select ... from item_pedido i1_0 where i1_0.pedido_id=?                       <- [1]     pedido 1: getItens()
--- SQL 4  select ... from cliente c1_0 where c1_0.id=?                                  <- [3713]  pedido 2
--- SQL 5  select ... from item_pedido i1_0 where i1_0.pedido_id=?                       <- [2]
--- SQL 6  select ... from cliente c1_0 where c1_0.id=?                                  <- [57]    pedido 3
--- SQL 7  select ... from item_pedido i1_0 where i1_0.pedido_id=?                       <- [3]
-```
-
-A quantidade de consultas é **1 + N (itens) + clientes distintos**: 21 para 10 pedidos, 201 para 100 e
-1.937 para 1000 (os 1000 primeiros pedidos têm 936 clientes distintos; um cliente já carregado é reaproveitado
-do contexto de persistência). O tempo cresce junto: de 12 ms para 237 ms.
-
-`item.getProduto().getId()` **não** dispara consulta: o id vem do proxy LAZY, sem carregar o produto (confirmado
-pelo `X-SQL-Count`, que seria maior se cada item buscasse o seu produto).
-
-## Otimização das consultas
-
-### JOIN FETCH (JPQL)
-Duas consultas, independentemente do limite ([sql-join-fetch.txt](resultados/persistencia/sql-join-fetch.txt)):
+**JOIN FETCH em dois passos** (JPQL, 2 consultas para qualquer limite; [sql-join-fetch.txt](resultados/persistencia/sql-join-fetch.txt)):
 
 ```java
 List<Long> ids = entityManager.createQuery("SELECT p.id FROM Pedido p ORDER BY p.id", Long.class)
     .setMaxResults(limite).getResultList();
 entityManager.createQuery("""
-        SELECT p FROM Pedido p
-        JOIN FETCH p.cliente
-        JOIN FETCH p.itens
-        WHERE p.id IN :ids
-        ORDER BY p.id
-        """, Pedido.class).setParameter("ids", ids).getResultList();
+        SELECT p FROM Pedido p JOIN FETCH p.cliente JOIN FETCH p.itens
+        WHERE p.id IN :ids ORDER BY p.id""", Pedido.class).setParameter("ids", ids).getResultList();
 ```
 
-São dois passos porque um JOIN FETCH de coleção com `setMaxResults` não pode virar `LIMIT` no SQL: o limite
-valeria para as linhas de item, não para os pedidos. O Hibernate então traz todas as linhas e pagina em memória
-(aviso `HHH90003004: firstResult/maxResults specified with collection fetch; applying in memory`). Com 100 mil
-pedidos, isso significaria ler a tabela inteira.
+Num passo só, o `setMaxResults` com JOIN FETCH de coleção não vira `LIMIT`: o Hibernate pagina em memória (aviso
+`HHH90003004`) depois de ler todos os pedidos.
 
-Ganho sobre o LAZY: de 1.937 para 2 consultas e de **237 ms para 45 ms (5,3×)** com 1000 pedidos. Com 10
-pedidos o ganho é menor (12,3 → 9,6 ms), porque poucas idas ao banco já são baratas num banco local.
-
-### SQL nativo
-Uma consulta ([sql-nativa.txt](resultados/persistencia/sql-nativa.txt)), com o limite aplicado aos pedidos
-numa subconsulta e as linhas planas agrupadas em Java:
+**SQL nativo** (1 consulta; o limite vale para os pedidos, na subconsulta; as linhas são agrupadas em Java):
 
 ```sql
 SELECT p.id, p.data_pedido, p.status, p.valor_total, c.nome AS cliente_nome,
@@ -474,231 +447,442 @@ JOIN item_pedido i ON i.pedido_id = p.id
 ORDER BY p.id, i.id
 ```
 
-**Houve ganho real em relação ao JOIN FETCH?** Sim, mensurável: 13,1 ms contra 44,9 ms com 1000 pedidos
-(3,4×) e 6,4 ms contra 9,6 ms com 10. O ganho vem de:
-- seleciona só as 8 colunas usadas, enquanto o JOIN FETCH traz todas as colunas de cliente e item;
-- não cria entidades gerenciadas: 1000 pedidos, 2.995 itens e os clientes, todos registrados no contexto de persistência;
-- faz uma ida ao banco a menos.
+**Comparação isolada** (tabela da seção 4.1): com 1000 pedidos, o JOIN FETCH foi 5,3 vezes mais rápido que o
+LAZY (44,89 × 237,18 ms). Com 10 pedidos a diferença é menor (12,33 × 9,64 ms).
 
-Em valor absoluto, porém, a maior parte do ganho já veio do JOIN FETCH (237 → 45 ms). O nativo acrescenta mais
-32 ms em 1000 pedidos e cerca de 3 ms em páginas de tamanho comum (10 a 100).
+**Sob carga** (cenário 2 do k6, `limite=20`: o LAZY faz 1 + 20 + 20 = 41 SQLs, pois os 20 primeiros pedidos têm
+20 clientes distintos). Fonte: [resumo.md](resultados/carga/resumo.md).
 
-**Custos do SQL nativo:**
-- **Manutenção:** o mapeamento é manual, com aliases de coluna, `addScalar` com tipos e conversão do `status`.
-  A consulta é uma string que o compilador não verifica.
-- **Sem validação na inicialização:** o `ddl-auto: validate` confere as entidades, não a SQL nativa. Renomear uma
-  coluna quebra a consulta só quando ela é executada.
-- **Portabilidade:** `LIMIT` e a subconsulta no `FROM` são do dialeto PostgreSQL. Trocar de banco exige revisar
-  o SQL; o JPQL do JOIN FETCH é traduzido pelo Hibernate para qualquer dialeto.
-- **Sem contexto de persistência:** o resultado é um DTO, não entidades. Serve para leitura, não para alterar e
-  salvar.
+| VUs | LAZY: req/s · p95 | EAGER: req/s · p95 | JOIN FETCH: req/s · p95 | SQL nativo: req/s · p95 |
+|---:|---|---|---|---|
+| 10 | 681 · 20,75 ms | 699 · 21,40 ms | 2.816 · 5,28 ms | 3.372 · 4,52 ms |
+| 50 | 727 · 109,02 ms | 714 · 108,18 ms | 3.025 · 31,58 ms | 3.567 · 25,98 ms |
+| 100 | 725 · 221,71 ms | 717 · 215,37 ms | 3.005 · 66,24 ms | 3.496 · 57,36 ms |
+| 200 | 753 · 431,57 ms | 732 · 449,27 ms | 2.989 · 139,26 ms | 3.504 · 116,82 ms |
 
-**Conclusão:** o JOIN FETCH resolve o problema principal (o N+1) mantendo o código portável. O SQL nativo só se
-justifica em pontos quentes ou relatórios em que a diferença restante importa. Uma projeção JPQL direto em DTO,
-como o `buscarDTO` do cache, capturaria parte desse ganho (só colunas necessárias, sem entidades) sem perder a
-portabilidade.
+![Latência p95 por nível de carga, cenário de persistência](resultados/graficos/persistencia_p95.png)
 
-### Alternativas não implementadas
-- **Batch fetching** (`@BatchSize(size = 100)` na coleção, ou `hibernate.default_batch_fetch_size`): mantém o
-  código LAZY, mas o Hibernate carrega as associações pendentes em blocos com `WHERE pedido_id IN (...)`. Com
-  1000 pedidos seriam cerca de 1 + 10 (itens) + 10 (clientes) consultas. Não foi ligado de propósito, porque
-  esconderia o N+1 que o experimento precisa mostrar.
-- **Buscar em lote + mapa** (refatoração do "smell de acesso repetitivo" da aula): uma consulta para os pedidos,
-  outra para os clientes (`WHERE id IN`) e outra para os itens (`WHERE pedido_id IN`), montados em memória com
-  `Map`. São 3 consultas fixas. A API já usa esse padrão na criação de pedido (`findAllById` + `Map<Long, Produto>`).
+*LAZY e EAGER se sobrepõem em todos os níveis; JOIN FETCH e nativo ficam juntos, bem abaixo.*
 
-### Relação com a aula
-O N+1 é trabalho repetido que cresce com N: O(N) idas ao banco, cada uma com latência fixa de rede, parsing e
-execução. A consulta otimizada faz O(1) idas, com 2 consultas no JOIN FETCH e 1 na nativa, para qualquer N. É a
-mesma redução de trabalho repetido da memoization no Fibonacci (O(2ⁿ) → O(n)): o custo deixa de crescer com
-a quantidade de repetições. Os resultados mostram isso: o LAZY passa de 21 para 1.937 consultas quando N vai de
-10 para 1000, enquanto JOIN FETCH e nativa ficam em 2 e 1.
+![Throughput por nível de carga, cenário de persistência](resultados/graficos/persistencia_throughput.png)
 
-## Otimização com índices
+*O throughput de cada estratégia é praticamente constante desde 10 VUs: o pool de 10 conexões já está saturado.*
 
-### Consulta escolhida
-A consulta é "pedidos de um cliente, do mais recente para o mais antigo", a mesma do enunciado e do slide de
-índices. É o que a API executa em `GET /api/clientes/{id}/pedidos`. O SQL gerado pelo Hibernate, copiado do log:
+#### O SQL nativo trouxe benefícios reais? Manutenção e portabilidade (4.4)
+
+**Ganho real, mas pequeno depois do JOIN FETCH.** Isolado, com 1000 pedidos, o nativo foi 3,4 vezes mais rápido
+que o JOIN FETCH (13,13 × 44,89 ms); sob carga, com 20 pedidos, a vantagem foi de 16% a 20% em throughput. O salto
+grande veio de eliminar o N+1 (4,0 a 4,2 vezes sob carga). O nativo seleciona só as 8 colunas usadas, não cria
+entidades gerenciadas e faz uma ida ao banco a menos; a CPU da API mostra a diferença (cerca de 460% no JOIN FETCH
+contra 288% no nativo).
+
+**Custos:** mapeamento manual (aliases, `addScalar` com tipos, conversão do `status`) numa string que o compilador
+não verifica; nenhuma validação na subida (o `ddl-auto: validate` confere entidades, não SQL nativo, e uma coluna
+renomeada só quebra na execução); **portabilidade** menor (`LIMIT` e subconsulta no `FROM` seguem o dialeto do
+PostgreSQL, enquanto o JPQL é traduzido pelo Hibernate para qualquer banco); e o resultado é um DTO, não serve para
+alterar e salvar.
+
+**Conclusão:** o JOIN FETCH resolve o problema principal e mantém a portabilidade. O nativo se justifica em pontos
+quentes ou relatórios em que os 16% a 20% restantes importam; uma projeção JPQL em DTO, como o `buscarDTO`,
+captura parte desse ganho sem perder a portabilidade.
+
+### 4.3. Índices
+
+**Consulta escolhida:** "pedidos de um cliente, do mais recente para o mais antigo", a do enunciado e do slide. É
+a que a API executa em `GET /api/clientes/{id}/pedidos` (SQL copiado do log do Hibernate):
 
 ```sql
 select p1_0.id, p1_0.data_pedido, p1_0.status, p1_0.valor_total
-from pedido p1_0
-where p1_0.cliente_id=?
-order by p1_0.data_pedido desc
-offset ? rows fetch first ? rows only      -- offset só a partir da página 1
+from pedido p1_0 where p1_0.cliente_id=? order by p1_0.data_pedido desc fetch first ? rows only
 ```
 
-Ela combina as operações que a seção 5.1 do enunciado lista: filtro por uma coluna (`cliente_id`), ordenação
-(`data_pedido DESC`), limite e, na variante do slide, busca por intervalo (`data_pedido >= '2026-01-01'`).
+Ela combina filtro, ordenação e limite; o PostgreSQL não indexa chaves estrangeiras automaticamente. Também foram
+analisadas a consulta do enunciado (sem limite) e a do slide (com intervalo de datas).
 
-O "antes" existe porque **o PostgreSQL não cria índice para chave estrangeira automaticamente**: `pedido.cliente_id`
-é FK de `cliente`, mas não tem índice (decisão deliberada da Etapa 3). Já `item_pedido.pedido_id` foi indexado
-na Etapa 3, para que o experimento de N+1 medisse a quantidade de consultas e não a falta de índice.
+**Índice composto:**
 
-### O índice e por que ele é composto
 ```sql
 CREATE INDEX idx_pedido_cliente_data ON pedido (cliente_id, data_pedido DESC);
 ```
-- **`cliente_id` primeiro:** é o filtro de igualdade; o índice leva direto aos pedidos do cliente.
-- **`data_pedido DESC` em seguida:** dentro de um mesmo cliente, as entradas já estão na ordem do `ORDER BY`. O
-  banco não precisa ordenar e, com `LIMIT 20`, **para de ler após 20 entradas**.
-- Para comparação, foi medido também um índice só em `cliente_id` (`idx_pedido_cliente`). Ele resolve o filtro,
-  mas o `Sort` continua.
 
-Os scripts ficam em [db/indice/](db/indice/) e são executados manualmente pelo admin. O usuário da aplicação não
-tem permissão de DDL.
+`cliente_id` primeiro (filtro de igualdade); `data_pedido DESC` depois, para que as entradas de um cliente já
+fiquem na ordem do `ORDER BY`: o banco não ordena e, com `LIMIT 20`, para após 20 entradas.
 
-| Script | Função |
-|---|---|
-| `criar_indice.sql` / `remover_indice.sql` | índice composto (idempotentes, com `ANALYZE`) |
-| `criar_indice_simples.sql` / `remover_indice_simples.sql` | índice simples, só para comparação |
-| `explain_pedidos_cliente.sql` | consultas A (da API, páginas 0 e 2), B (do enunciado, sem limite) e C (do slide, com intervalo), com `EXPLAIN (ANALYZE, BUFFERS)` |
+**Estados medidos:** [scripts/experimento-indice.sh](scripts/experimento-indice.sh) percorre **sem → simples
+(`cliente_id`) → composto → sem**; o último "sem", na JVM já aquecida, é o controle de aquecimento. Fonte: [indice.csv](resultados/indice/indice.csv) e [resultados/explain/](resultados/explain/)
+(os 32 planos no [apêndice C](docs/apendice-experimentos.md#c-índices-todos-os-planos)).
 
-### Experimento
-Script: [scripts/experimento-indice.sh](scripts/experimento-indice.sh). Ele percorre os estados **sem → simples →
-composto → sem**, termina sem nenhum dos dois índices e devolve a tabela ao tamanho físico original. Em cada estado:
-- lista os índices (`pg_indexes`);
-- roda cada consulta 3 vezes para aquecer e salva o plano completo em [resultados/explain/](resultados/explain/);
-- registra a mediana do `Execution Time` de 10 execuções;
-- mede a API com 3 aquecimentos e 20 requisições (mediana e p95 do `curl`) e confere o `X-SQL-Count`.
+Consulta da API, página 0. Banco: mediana de 10 `EXPLAIN ANALYZE`; API: mediana de 20 requisições.
 
-O último estado, `sem_final`, repete o "sem" na mesma JVM, já aquecida. Ele é o controle que separa o efeito do
-índice do aquecimento da JVM no tempo da API. Clientes: **1** (225 pedidos, o mais frequente) e **545** (9
-pedidos, a mediana).
+| Estado | Cliente | Varredura | Sort | Linhas lidas | Removidas pelo filtro | Buffers | Banco | API |
+|---|---:|---|---|---:|---:|---:|---:|---:|
+| sem | 1 | Seq Scan | top-N heapsort | 225 | 99775 | 907 | 4,825 ms | 9,110 ms |
+| simples | 1 | Bitmap Heap Scan | top-N heapsort | 225 | 0 | 209 | 0,204 ms | 4,655 ms |
+| composto | 1 | **Index Scan** | **nenhum** | 20 | 0 | 26 | **0,054 ms** | 4,165 ms |
+| sem (controle) | 1 | Seq Scan | top-N heapsort | 225 | 99775 | 907 | 3,523 ms | 7,750 ms |
+| sem | 545 | Seq Scan | quicksort | 9 | 99991 | 907 | 5,107 ms | 9,590 ms |
+| composto | 545 | Bitmap Heap Scan | quicksort | 9 | 0 | 18 | 0,083 ms | 4,380 ms |
 
-Saídas: [resultados/indice/indice.csv](resultados/indice/indice.csv) e [resultados/indice/indice.txt](resultados/indice/indice.txt).
+Planos do cliente 1 ([sem_A_pagina0_cliente1.txt](resultados/explain/sem_A_pagina0_cliente1.txt),
+[composto_A_pagina0_cliente1.txt](resultados/explain/composto_A_pagina0_cliente1.txt)):
 
-### Resultados
-Banco: mediana de 10 `EXPLAIN ANALYZE`. API: mediana / p95 de 20 requisições (consultas A).
-"Linhas" = linhas devolvidas pelo nó de varredura; "removidas" = `Rows Removed by Filter`.
-
-| Estado | Consulta | Cliente | Varredura (índice) | Sort | Linhas | Removidas | Buffers hit/read | Banco | API mediana / p95 |
-|---|---|---:|---|---|---:|---:|---|---:|---|
-| sem | A_pagina0 | 1 | Seq Scan | top-N heapsort | 225 | 99775 | 907/0 | 4,825 ms | 9,110 / 10,76 ms |
-| sem | A_pagina2 | 1 | Seq Scan | top-N heapsort | 225 | 99775 | 907/0 | 4,189 ms | 9,740 / 11,10 ms |
-| sem | B_sem_limite | 1 | Seq Scan | quicksort | 225 | 99775 | 907/0 | 2,689 ms | — |
-| sem | C_intervalo | 1 | Seq Scan | quicksort | 100 | 99900 | 907/0 | 3,616 ms | — |
-| sem | A_pagina0 | 545 | Seq Scan | quicksort | 9 | 99991 | 907/0 | 5,107 ms | 9,590 / 10,39 ms |
-| sem | A_pagina2 | 545 | Seq Scan | quicksort | 9 | 99991 | 907/0 | 3,547 ms | 9,970 / 10,41 ms |
-| sem | B_sem_limite | 545 | Seq Scan | quicksort | 9 | 99991 | 907/0 | 4,040 ms | — |
-| sem | C_intervalo | 545 | Seq Scan | quicksort | 3 | 99997 | 907/0 | 3,162 ms | — |
-| simples | A_pagina0 | 1 | Bitmap Heap Scan (idx_pedido_cliente) | top-N heapsort | 225 | 0 | 209/0 | 0,204 ms | 4,655 / 5,07 ms |
-| simples | A_pagina2 | 1 | Bitmap Heap Scan (idx_pedido_cliente) | top-N heapsort | 225 | 0 | 209/0 | 0,217 ms | 4,840 / 5,20 ms |
-| simples | B_sem_limite | 1 | Bitmap Heap Scan (idx_pedido_cliente) | quicksort | 225 | 0 | 209/0 | 0,241 ms | — |
-| simples | C_intervalo | 1 | Bitmap Heap Scan (idx_pedido_cliente) | quicksort | 100 | 125 | 209/0 | 0,199 ms | — |
-| simples | A_pagina0 | 545 | Bitmap Heap Scan (idx_pedido_cliente) | quicksort | 9 | 0 | 17/0 | 0,079 ms | 4,470 / 4,97 ms |
-| simples | A_pagina2 | 545 | Bitmap Heap Scan (idx_pedido_cliente) | quicksort | 9 | 0 | 17/0 | 0,075 ms | 5,325 / 5,77 ms |
-| simples | B_sem_limite | 545 | Bitmap Heap Scan (idx_pedido_cliente) | quicksort | 9 | 0 | 17/0 | 0,089 ms | — |
-| simples | C_intervalo | 545 | Bitmap Heap Scan (idx_pedido_cliente) | quicksort | 3 | 6 | 17/0 | 0,081 ms | — |
-| composto | A_pagina0 | 1 | Index Scan (idx_pedido_cliente_data) | — | 20 | 0 | 26/0 | 0,054 ms | 4,165 / 4,83 ms |
-| composto | A_pagina2 | 1 | Index Scan (idx_pedido_cliente_data) | — | 60 | 0 | 66/0 | 0,081 ms | 4,880 / 7,72 ms |
-| composto | B_sem_limite | 1 | Bitmap Heap Scan (idx_pedido_cliente_data) | quicksort | 225 | 0 | 210/0 | 0,246 ms | — |
-| composto | C_intervalo | 1 | Bitmap Heap Scan (idx_pedido_cliente_data) | quicksort | 100 | 0 | 105/0 | 0,153 ms | — |
-| composto | A_pagina0 | 545 | Bitmap Heap Scan (idx_pedido_cliente_data) | quicksort | 9 | 0 | 18/0 | 0,083 ms | 4,380 / 4,98 ms |
-| composto | A_pagina2 | 545 | Bitmap Heap Scan (idx_pedido_cliente_data) | quicksort | 9 | 0 | 18/0 | 0,086 ms | 5,175 / 6,14 ms |
-| composto | B_sem_limite | 545 | Bitmap Heap Scan (idx_pedido_cliente_data) | quicksort | 9 | 0 | 18/0 | 0,076 ms | — |
-| composto | C_intervalo | 545 | Bitmap Heap Scan (idx_pedido_cliente_data) | quicksort | 3 | 0 | 12/0 | 0,073 ms | — |
-| sem_final | A_pagina0 | 1 | Seq Scan | top-N heapsort | 225 | 99775 | 907/0 | 3,523 ms | 7,750 / 8,79 ms |
-| sem_final | A_pagina2 | 1 | Seq Scan | top-N heapsort | 225 | 99775 | 907/0 | 3,181 ms | 7,940 / 9,60 ms |
-| sem_final | B_sem_limite | 1 | Seq Scan | quicksort | 225 | 99775 | 907/0 | 3,114 ms | — |
-| sem_final | C_intervalo | 1 | Seq Scan | quicksort | 100 | 99900 | 907/0 | 3,431 ms | — |
-| sem_final | A_pagina0 | 545 | Seq Scan | quicksort | 9 | 99991 | 907/0 | 3,986 ms | 8,360 / 8,75 ms |
-| sem_final | A_pagina2 | 545 | Seq Scan | quicksort | 9 | 99991 | 907/0 | 2,217 ms | 8,030 / 9,15 ms |
-| sem_final | B_sem_limite | 545 | Seq Scan | quicksort | 9 | 99991 | 907/0 | 3,071 ms | — |
-| sem_final | C_intervalo | 545 | Seq Scan | quicksort | 3 | 99997 | 907/0 | 4,162 ms | — |
-
-O `X-SQL-Count` foi **1** em todas as páginas com resultado. Foi **2** só na página 2 do cliente 545, que tem 9
-pedidos e por isso devolve uma página vazia; nesse caso a API confere a existência do cliente para decidir entre
-lista vazia e 404 (decisão da Etapa 4).
-
-### Planos antes e depois (cliente 1, página 0)
-**Sem índice** ([sem_A_pagina0_cliente1.txt](resultados/explain/sem_A_pagina0_cliente1.txt)): lê a tabela inteira,
-descarta 99.775 linhas e ordena as 225 restantes.
 ```
-Limit  (cost=2160.39..2160.44 rows=20) (actual time=4.999..5.002 rows=20 loops=1)
-  ->  Sort  (actual rows=20)   Sort Key: data_pedido DESC   Sort Method: top-N heapsort
-        ->  Seq Scan on pedido p1_0  (actual rows=225)
-              Filter: (cliente_id = 1)
-              Rows Removed by Filter: 99775
-              Buffers: shared hit=904
-```
-**Índice simples** ([simples_A_pagina0_cliente1.txt](resultados/explain/simples_A_pagina0_cliente1.txt)): encontra
-os 225 pedidos pelo índice, mas ainda visita 201 páginas e **ainda ordena**.
-```
-Limit  ->  Sort  Sort Method: top-N heapsort
-        ->  Bitmap Heap Scan on pedido p1_0  (actual rows=225)  Heap Blocks: exact=201
-              ->  Bitmap Index Scan on idx_pedido_cliente  Index Cond: (cliente_id = 1)
-```
-**Índice composto** ([composto_A_pagina0_cliente1.txt](resultados/explain/composto_A_pagina0_cliente1.txt)): **sem
-nó Sort**. Lê na ordem do índice e para após 20 linhas.
-```
-Limit  (cost=0.42..73.72 rows=20) (actual time=0.090..0.217 rows=20 loops=1)
-  ->  Index Scan using idx_pedido_cliente_data on pedido p1_0  (cost=0.42..707.79 rows=193) (actual rows=20)
-        Index Cond: (cliente_id = 1)
-        Buffers: shared hit=26
+-- sem índice: lê a tabela inteira, descarta 99.775 linhas e ordena as 225 restantes
+Limit  (actual time=4.999..5.002 rows=20 loops=1)
+  ->  Sort  Sort Key: data_pedido DESC  Sort Method: top-N heapsort
+        ->  Seq Scan on pedido p1_0  (actual rows=225)  Filter: (cliente_id = 1)  Rows Removed by Filter: 99775
+
+-- índice composto: sem Sort; lê na ordem do índice e para após 20 linhas
+Limit  (actual time=0.090..0.217 rows=20 loops=1)
+  ->  Index Scan using idx_pedido_cliente_data on pedido p1_0  (actual rows=20)
+        Index Cond: (cliente_id = 1)   Buffers: shared hit=26
 ```
 
-### Observado, não presumido: quando o composto não vira Index Scan
-Com o índice composto disponível, o planejador **não** o percorreu em ordem em três situações. Em todas usou o
-índice, mas via Bitmap Heap Scan seguido de `Sort`:
+**Observado, não presumido.** Com o composto disponível, o planejador preferiu Bitmap Heap Scan + Sort em três
+casos: o cliente 545 (com 9 linhas, o `LIMIT 20` não corta nada), a consulta sem limite (ler 225 linhas em 201
+páginas na ordem física e ordenar custou 484,66 no plano, contra 707,79 do Index Scan) e a consulta com intervalo
+(que entrou no `Index Cond`, sem nenhuma linha removida por filtro). O índice foi usado em todos; mudou a forma.
 
-- **Consulta B (sem limite), cliente 1.** O Index Scan completo custaria 707,79 no plano (custo total do nó acima);
-  Bitmap + Sort custou 484,66. Os 225 pedidos estão espalhados por 201 das 904 páginas da tabela
-  (`Heap Blocks: exact=201`, porque os pedidos foram gerados com datas e clientes aleatórios). Percorrer o índice em
-  ordem significaria saltar entre páginas de forma aleatória, enquanto o bitmap lê cada página uma vez, na ordem
-  física. Ordenar 225 linhas em memória é barato (quicksort, 38 kB). **Com `LIMIT 20` a conta se inverte:** o Index
-  Scan só paga 20/193 do custo (73,72), contra 570 do Bitmap + Sort.
-- **Cliente 545, qualquer consulta.** Com 9 linhas o `LIMIT 20` não corta nada, e ordenar 9 linhas é trivial.
-  Bitmap + quicksort custa 41,6 e lê 18 páginas. **A seletividade mudou o plano**, não só o tempo: o cliente 1
-  (225 linhas) usa Index Scan na consulta da API; o 545 (9 linhas), não.
-- **Consulta C (intervalo), cliente 1.** Usa Bitmap + Sort, mas o intervalo de datas entra no `Index Cond`
-  (`cliente_id = 1 AND data_pedido >= '2026-01-01'`). Por isso visita só 96 páginas e não remove nenhuma linha
-  por filtro. Com o índice simples, a data é conferida depois, no heap (`Rows Removed by Filter: 125`, 201 páginas).
+**Custos** (inserção de 10.000 pedidos em `BEGIN ... ROLLBACK`, mediana de 5; [indice.txt](resultados/indice/indice.txt)):
 
-As estimativas do planejador ficaram próximas do real (193 estimadas × 225 reais no cliente 1; 10 × 9 no 545), e
-a tabela de 7 MB é pequena demais para varredura paralela. As escolhas acima vêm do custo, não de estatística errada.
-
-As consultas da Etapa 6 (filtradas por `pedido.id` e `item_pedido.pedido_id`) mantiveram os mesmos planos e o
-mesmo número de SQLs com o índice composto criado; o script confere isso automaticamente.
-
-### Custos do índice
-| | Sem índice extra | + índice simples | + índice composto |
+| | Sem índice extra | + simples | + composto |
 |---|---:|---:|---:|
-| Tamanho do índice | — | 920 kB (13% da tabela) | **3.104 kB (43% da tabela de 7.232 kB)** |
-| Inserção de 10.000 pedidos, mediana de 5 (tempo) | 105,3 ms | 114,6 ms | 112,9 ms |
-| WAL gerado pela inserção | 2.136 KB | 2.815 KB (+32%) | **2.842 KB (+33%)** |
+| Tamanho do índice | — | 920 kB | 3.104 kB (43% da tabela de 7.232 kB) |
+| WAL gerado na inserção | 2.136 KB | 2.815 KB | 2.842 KB (+33%) |
+| Tempo da inserção | 105,332 ms | 114,583 ms | 112,936 ms |
 
-- **Tamanho.** O composto é 3,4× maior que o simples. O PostgreSQL deduplica entradas repetidas em índices B-tree
-  (versão 13 em diante): no simples, cada `cliente_id` aparece em média 10 vezes e é armazenado uma vez só. No
-  composto, `(cliente_id, data_pedido)` é praticamente único, então não há deduplicação.
-- **Escrita.** A inserção é feita dentro de `BEGIN ... ROLLBACK` (a contagem continua em 100.000), seguida de
-  `VACUUM`. O tempo subiu de 7% a 9%, diferença da mesma ordem da variação entre execuções (100 a 141 ms), porque a
-  checagem da FK de cliente e a gravação na tabela dominam o custo. O WAL é determinístico e mostra o custo real:
-  cada linha inserida também grava uma entrada em cada índice, e **o volume escrito subiu um terço**.
-- **Uso pela aplicação, não só pelo EXPLAIN.** O `idx_scan` do índice (`pg_stat_user_indexes`) aumentou exatamente
-  4 com 4 chamadas à API, nos dois estados com índice.
+O tempo variou de 100 a 141 ms entre execuções e não é conclusivo; o WAL é determinístico e mostra o custo.
 
-### Respostas da seção 5.4
-1. **O índice foi efetivamente utilizado pelo banco?** Sim, em todas as consultas dos estados com índice. Na
-   consulta da API para o cliente 1 ele foi usado da forma ideal: Index Scan sem Sort, parando em 20 linhas. Nos
-   outros casos o banco preferiu Bitmap Heap Scan + Sort, pelos custos explicados acima. A aplicação também o usou
-   (`idx_scan` +4 com 4 requisições).
-2. **Houve redução no tempo de execução?** No banco, sim: a consulta da API para o cliente 1 caiu de 3,5–4,8 ms
-   para **0,054 ms** (cerca de 65 a 90 vezes menos), e as páginas lidas caíram de 907 para 26. Na API, a mediana
-   caiu de 7,8 ms (controle `sem_final`, mesma JVM aquecida) para 4,2 ms. A redução é menor em proporção porque a
-   maior parte do tempo da requisição é HTTP, Spring e serialização, não banco.
-3. **Quais fatores influenciaram o resultado?** A seletividade (225 × 9 linhas mudou o plano); o `LIMIT`, que
-   torna o Index Scan ordenado vantajoso porque pode parar cedo; a dispersão física das linhas (201 páginas para
-   225 linhas), que favorece o bitmap quando é preciso ler tudo; o tamanho da tabela (7 MB cabem nos
-   `shared_buffers`, por isso todo acesso foi `hit` e nenhum `read`; com a tabela em disco, a diferença seria
-   maior); e a ordem das colunas no índice.
-4. **Quais os custos de manter índices adicionais?** Espaço (3,1 MB, 43% da tabela), escrita (+33% de WAL por
-   inserção, e também em cada UPDATE que altere `cliente_id` ou `data_pedido` e em cada DELETE), manutenção
-   (VACUUM, inchaço após muitas alterações) e mais trabalho para o planejador avaliar.
-5. **Criar índices em todas as colunas consultadas seria uma boa estratégia?** Não. É o mesmo erro do algoritmo
-   guloso da aula: cada índice é um ótimo local para uma leitura, mas a soma piora o todo. Toda escrita paga por
-   todos os índices, e o espaço cresce. Muitos índices nem seriam usados: com 9 linhas por cliente o banco já
-   preferiu bitmap; colunas pouco seletivas, como `status` com 3 valores, levariam a seq scan de qualquer forma. E
-   índices de uma coluna só não resolvem filtro e ordenação juntos, como mostrou o índice simples, que manteve o
-   `Sort`. O critério é indexar as consultas frequentes e caras, com as colunas na ordem em que a consulta as usa,
-   e validar com `EXPLAIN ANALYZE` e `pg_stat_user_indexes`.
+**Sob carga** (cenário 3 do k6: clientes 1 a 5, com 85 a 225 pedidos cada; estado alternado a cada repetição).
+Fonte: [resumo.md](resultados/carga/resumo.md).
+
+| VUs | Sem índice: req/s · p95 | Com índice: req/s · p95 | Throughput |
+|---:|---|---|---:|
+| 10 | 992 · 14,44 ms | 6.937 · 1,97 ms | 7,0× |
+| 50 | 1.019 · 82,04 ms | 7.013 · 14,70 ms | 6,9× |
+| 100 | 1.003 · 177,14 ms | 6.816 · 35,29 ms | 6,8× |
+| 200 | 1.018 · 364,41 ms | 6.780 · 76,02 ms | 6,7× |
+
+O `idx_scan` subiu de 1,01 a 1,04 por requisição com o índice e 0 sem ele, o que confirma o estado de cada rodada.
+
+![Latência p95 por nível de carga, cenário de índice](resultados/graficos/indice_p95.png)
+
+*Sem índice, o p95 cresce na proporção dos VUs (177 ms com 100, 364 ms com 200); com o índice, fica de 4,8 a 7,3 vezes menor.*
+
+![Throughput por nível de carga, cenário de índice](resultados/graficos/indice_throughput.png)
+
+*Os dois patamares são constantes: cerca de 1.000 req/s sem índice e de 6.780 a 7.013 req/s com ele.*
+
+#### Respostas da seção 5.4
+
+**1. O índice foi efetivamente utilizado pelo banco?**
+Sim, em todas as consultas dos estados com índice; na da API para o cliente 1, da forma ideal (Index Scan sem
+Sort, parando em 20 linhas). A aplicação também o usou: `idx_scan` +4 com 4 requisições e cerca de 1 por requisição
+sob carga.
+
+**2. Houve redução no tempo de execução?**
+Sim. No banco, de 3,5–4,8 ms para 0,054 ms (de 65 a 90 vezes menos), com 26 páginas lidas em vez de 907. Na API
+isolada, de 7,750 ms (controle) para 4,165 ms, porque o resto da requisição (HTTP, Spring, serialização) não muda.
+Sob carga, o throughput subiu de 6,7 a 7,0 vezes, e cada transação passou a ler 23,0 blocos e 20,0 tuplas, contra
+903,6 blocos e cerca de 99.950 tuplas (a tabela inteira).
+
+**3. Quais fatores influenciaram o resultado?**
+A **seletividade** (225 linhas usaram Index Scan; 9 linhas, Bitmap); o **`LIMIT`**, que deixa o Index Scan parar
+cedo; a **dispersão física** das linhas (225 pedidos em 201 páginas), que favorece o bitmap quando é preciso ler
+tudo; a **ordem das colunas** (o índice simples manteve o Sort); e o **tamanho da tabela**: os 7 MB cabem na
+memória do PostgreSQL, todo acesso foi `hit`. Em disco, a diferença seria maior.
+
+**4. Quais podem ser os custos de manter índices adicionais?**
+Espaço (3,1 MB, 43% da tabela), escrita (+33% de WAL por inserção, e o mesmo em UPDATEs dessas colunas e em
+DELETEs), manutenção (VACUUM, inchaço) e mais planos para o planejador avaliar.
+
+**5. Criar índices em todas as colunas consultadas seria uma boa estratégia? Por quê?**
+Não. É a armadilha do algoritmo guloso: cada índice é um ótimo local para uma leitura, mas toda escrita paga por
+todos. Muitos nem seriam usados (uma coluna como `status`, com 3 valores, levaria a Seq Scan de qualquer forma), e
+índices de uma coluna não resolvem filtro e ordenação juntos, como mostrou o simples. O critério é indexar as
+consultas frequentes e caras, na ordem em que usam as colunas, e confirmar com `EXPLAIN ANALYZE` e
+`pg_stat_user_indexes`.
+
+## 5. Testes de desempenho
+
+### 5.1. Ferramenta: Grafana k6
+
+O k6, apresentado na aula, descreve os testes em JavaScript ([k6/](k6/)), calcula p95 e p99 nativamente e grava o
+resumo de cada rodada em JSON, de onde saem as tabelas e os gráficos. Foi preferido ao JMeter porque o teste em
+código é versionado, revisável e roda por script, sem interface gráfica.
+
+### 5.2. Modelo de carga, cenários e níveis
+
+Executor `constant-vus`, **sem think time** (modelo fechado): cada VU faz a próxima requisição assim que recebe a
+anterior. Por isso **VUs não são requisições por segundo**: o throughput é o resultado medido e cai quando a
+latência sobe. Todos os testes são só de leitura.
+
+| Cenário | Requisição | Alvos comparados |
+|---|---|---|
+| 1 — cache ([k6/cache.js](k6/cache.js)) | `GET /api/produtos/{id}/{alvo}`, id sorteado entre os 901 ativos | sem cache; HIT (pré-carregado); MISS contínuo (TTL de 1 ms); partida a frio (`FLUSHDB` antes), com e sem `sync` |
+| 2 — persistência ([k6/persistencia.js](k6/persistencia.js)) | `GET /api/experimentos/pedidos/{alvo}?limite=20` | LAZY, EAGER, JOIN FETCH, SQL nativo |
+| 3 — índice ([k6/indice.js](k6/indice.js)) | `GET /api/clientes/{id}/pedidos?page=0&size=20`, clientes 1 a 5 | sem índice × com índice composto |
+
+**Níveis** de 10, 50, 100 e 200 VUs; **rodadas** de 10 s de aquecimento descartado + 30 s medidos; **3
+repetições** por nível, com os alvos intercalados; **132 rodadas** em cerca de 115 minutos. No cenário 2, o
+`limite=20` evita que o LAZY, com cerca de 1.937 SQLs por requisição em 1000 pedidos, só meça a fila do pool.
+
+### 5.3. Cuidados adotados (6.5)
+
+| Cuidado | O que foi feito |
+|---|---|
+| Ambiente e configuração equivalentes | mesma máquina e mesma instância da API para todos os alvos de um bloco; pool de 10 conexões; log de SQL desligado |
+| Mesma carga para comparar | mesmos níveis, duração e repetições para todos os alvos de um cenário |
+| Quantidade de dados registrada | 100.000 pedidos, 299.702 itens, 10.000 clientes, 1.000 produtos; checksum conferido no fim |
+| Estado inicial do cache controlado | HIT: pré-carga antes de cada repetição; MISS: TTL de 1 ms; frio: `FLUSHDB` logo antes; taxa de HIT medida em cada rodada |
+| Aquecimento | 30 s a 50 VUs no início de cada bloco e 10 s descartados antes de cada rodada |
+| Atividades simultâneas | blocos rodados sem outras tarefas do projeto; processos ativos registrados no início de cada bloco |
+| Repetição | 3 repetições; tabelas com a mediana e, no [resumo.md](resultados/carga/resumo.md), o mínimo e o máximo |
+| Ambiente próprio | tudo em `127.0.0.1`, numa máquina local |
+
+### 5.4. Métricas e ambiente
+
+- **Do k6:** latência média, mediana, p95, p99 e máxima, throughput e taxa de erros (`check` de status 200).
+- **A cada ~2 s:** CPU da API, do k6, do PostgreSQL e do Redis (em % de um núcleo), memória da JVM, conexões ativas
+  e pendentes do pool, acertos e falhas do cache.
+- **Por rodada:** deltas de `pg_stat_database` (transações, blocos e tuplas lidos), `cache.gets` e `idx_scan`.
+
+**Ambiente** ([ambiente.txt](resultados/carga/ambiente.txt)): notebook com Ubuntu 24.04.5, Intel i5-1235U (CPU
+móvel de 15 W, 12 núcleos lógicos) e 15 GiB de RAM; Java 21.0.13, PostgreSQL 17.12, Redis 8.10.3, k6 v2.4.0. k6,
+API, PostgreSQL e Redis rodaram na mesma máquina.
+
+**Checagem da partida a frio.** Na bateria principal, a partida a frio superou o HIT pré-carregado com 100 VUs
+(19.451 × 17.373 req/s), embora as duas sejam quase 100% HIT. A suspeita era a ordem: o HIT sempre rodava logo
+depois do sem cache, que exige o máximo do PostgreSQL. Intercalando as duas condições (HIT, frio, HIT, frio, HIT,
+frio) com o mesmo aquecimento, a diferença se inverteu: HIT com 14.618 e frio com 13.742 req/s, com faixas
+sobrepostas (11.898–15.769 × 13.492–14.970). Era efeito de ordem e de temperatura da CPU, não do cache. Fonte:
+[checagem-frio-hit/resumo.md](resultados/carga/checagem-frio-hit/resumo.md).
+
+### 5.5. Resultados com 100 VUs
+
+Mediana de 3 repetições. Fonte: [resultados/carga/resumo.md](resultados/carga/resumo.md), com os 4 níveis, o mínimo
+e o máximo, CPU, memória, pool e banco.
+
+| Cenário | Alvo | Média | p95 | p99 | Throughput | Erros |
+|---|---|---:|---:|---:|---:|---:|
+| Cache | sem cache | 13,46 ms | 32,62 ms | 47,47 ms | 7.311 req/s | 0,00% |
+| | HIT | 5,52 ms | 10,24 ms | 14,10 ms | 17.373 req/s | 0,00% |
+| | MISS contínuo | 17,99 ms | 35,76 ms | 49,15 ms | 5.455 req/s | 0,00% |
+| | partida a frio | 4,94 ms | 9,09 ms | 12,45 ms | 19.451 req/s | 0,00% |
+| | partida a frio, `sync` | 4,95 ms | 9,24 ms | 12,51 ms | 19.414 req/s | 0,00% |
+| Persistência | LAZY | 137,23 ms | 221,71 ms | 308,30 ms | 725 req/s | 0,00% |
+| | EAGER | 138,95 ms | 215,37 ms | 309,16 ms | 717 req/s | 0,00% |
+| | JOIN FETCH | 33,07 ms | 66,24 ms | 91,03 ms | 3.005 req/s | 0,00% |
+| | SQL nativo | 28,43 ms | 57,36 ms | 76,46 ms | 3.496 req/s | 0,00% |
+| Índice | sem índice | 99,27 ms | 177,14 ms | 213,43 ms | 1.003 req/s | 0,00% |
+| | com índice | 14,48 ms | 35,29 ms | 49,15 ms | 6.816 req/s | 0,00% |
+
+Nenhuma rodada teve erro, em nenhum nível; a maior latência individual foi 1,38 s, abaixo do timeout de 5 s do
+pool. Os gráficos de p95 e throughput estão nas seções 3.7, 4.2 e 4.3; os abaixo comparam média, p95 e p99:
+
+![Média, p95 e p99 com 100 VUs, cenário de cache](resultados/graficos/cache_cauda_100vus.png)
+
+*Sem cache tem a cauda mais longa (p99 de 3,5 vezes a média, pela fila no pool); o HIT encurta as três medidas.*
+
+![Média, p95 e p99 com 100 VUs, cenário de persistência](resultados/graficos/persistencia_cauda_100vus.png)
+
+*LAZY e EAGER são iguais nas três medidas; o p99 do LAZY (308 ms) é quatro vezes o do SQL nativo (76 ms).*
+
+![Média, p95 e p99 com 100 VUs, cenário de índice](resultados/graficos/indice_cauda_100vus.png)
+
+*O índice reduz a média em 6,9 vezes, mas o p99 em 4,3 vezes: a cauda melhora menos que a média.*
+
+### 5.6. Testes funcionais
+
+`./mvnw clean verify` roda **87 testes** (1 pulado por padrão: o de `statement_timeout`, que leva 11 s). São **25
+unitários** (regras de status, cálculo do total, criação de pedido com repositórios mockados) e **62 de
+integração** (`@SpringBootTest` + MockMvc contra o PostgreSQL e o Redis do Compose: códigos HTTP, formato dos
+erros, invalidação do cache, `X-SQL-Count` de cada estratégia, JSON idêntico entre elas). Lista por classe no
+[apêndice E](docs/apendice-experimentos.md#e-testes-funcionais-por-classe).
+
+Os funcionais verificam se o sistema **faz a coisa certa** (passa ou falha); os de desempenho medem **quão bem**
+ele responde sob carga. Um não substitui o outro: os funcionais garantem que as quatro estratégias de consulta
+devolvem a mesma resposta, o que torna válida a comparação de desempenho entre elas.
+
+## 6. Discussão
+
+### 6.1. Questões da seção 6.7
+
+**1. Qual técnica apresentou os maiores ganhos de desempenho?**
+O **índice composto**: throughput de 6,7 a 7,0 vezes maior e p95 de 4,8 a 7,3 vezes menor, em todos os níveis. Por
+transação, o banco passou de 903,6 blocos e cerca de 99.950 tuplas para 23,0 blocos e 20,0 tuplas. Em seguida vêm
+as **consultas otimizadas** (JOIN FETCH com 4,0 a 4,2 vezes e SQL nativo com 4,7 a 5,0 vezes o throughput do LAZY)
+e o **cache com HIT** (1,7 a 2,5 vezes).
+
+**2. Os ganhos foram mantidos quando a carga aumentou?**
+**Índice e consultas: sim, quase constantes**, porque os dois lados já estão saturados com 10 VUs (índice 7,0× →
+6,7×; nativo sobre LAZY 5,0× → 4,7×). **Cache: o ganho cresceu**, de 1,7 vez (10 VUs) para 2,3, 2,4 e 2,5 em
+throughput, e de 1,9 para 3,4 no p95: sem cache, as requisições disputam o pool (até 187 pendentes) e o throughput
+cai de 8.011 para 5.661 req/s; com HIT, o pool não é usado. Com 200 VUs, o HIT também cai (17.373 → 13.953 req/s),
+limitado pela CPU da máquina.
+
+**3. Houve diferenças relevantes entre latência média, p95 e p99?**
+Sim. Com 200 VUs, o p95 ficou entre 1,6 e 2,7 vezes a média, e o p99 entre 2,1 e 3,8 vezes. A cauda é mais longa
+onde a espera é desigual: **sem cache, o p99 foi 3,8 vezes a média** (133,48 × 35,04 ms), pela fila do pool. LAZY e
+EAGER têm cauda proporcionalmente curta (p99 de 2,1 a 2,2 vezes a média), mas a pior em valor absoluto (557,30 e
+599,50 ms). E melhorar a média não basta: com 200 VUs, o índice reduziu a média em 6,7 vezes (195,48 → 29,29 ms) e
+o p99 em só 4,1 vezes (429,99 → 105,79 ms).
+
+**4. Alguma otimização apresentou resultados inferiores aos esperados?**
+- **Cache com MISS foi mais lento que sem cache** (seção 3.8). Com 200 VUs, o p95 do MISS (80,83 ms) ficou abaixo
+  do sem cache (94,22 ms) com throughput parecido; uma hipótese não verificada é que as idas ao Redis espaçam a
+  chegada ao pool (168 × 187 pendentes).
+- **`sync = true` não reduziu o efeito manada** (128 × 137 MISS redundantes com 200 VUs; seção 3.7).
+- **EAGER não trouxe ganho nenhum sobre LAZY** (725 × 717 req/s com 100 VUs): em lista, os dois fazem as mesmas
+  41 consultas.
+- **O SQL nativo rendeu só 16% a 20% a mais que o JOIN FETCH** sob carga, contra 3,4 vezes no teste isolado com
+  1000 pedidos: com 20 pedidos, montar entidades pesa menos.
+
+**5. Quais foram os principais gargalos identificados?**
+
+| Gargalo | Onde | Evidência |
+|---|---|---|
+| Pool Hikari (10 conexões) | sem cache, MISS, persistência, índice | 10 conexões ativas o tempo todo e pendentes ≈ VUs − 10 (até 189 com 200 VUs); throughput constante e latência crescendo com os VUs |
+| CPU do PostgreSQL | sem índice | PostgreSQL com 798% a 816% (cerca de 8 núcleos) e API com só 84% a 91%: cada requisição varre a tabela |
+| CPU da máquina | cache com HIT e partida a frio | API com cerca de 480% e k6 com cerca de 420% (quase 9 dos 12 núcleos lógicos); PostgreSQL ocioso (1%) |
+| CPU da API | JOIN FETCH | API com 433% a 460% contra 267% a 289% do nativo; PostgreSQL mais baixo (246% a 255% × 406% a 430%) |
+| k6 na mesma máquina | todos | de 33% (LAZY) a 423% (HIT) de CPU, disputando núcleos com a API nos cenários mais rápidos |
+
+**6. Como a redução das consultas ao banco influenciou o desempenho?**
+De forma direta. **Persistência:** com 2 e 1 SQLs em vez de 41, o throughput subiu de cerca de 720 para 3.000 e
+3.500 req/s com as mesmas 10 conexões, que cada requisição segura por menos tempo. **Cache:** de cerca de 1
+transação por requisição para 0,000 com HIT; o pool sai do caminho e o gargalo passa para a CPU. **Índice:** a
+quantidade de consultas não mudou, mas cada uma lê 20 tuplas em vez de cerca de 99.950; menos trabalho por consulta
+teve o mesmo efeito que menos consultas.
+
+**7. Quais são os possíveis custos ou riscos das otimizações adotadas?**
+
+| Técnica | Ganho | Custo ou risco |
+|---|---|---|
+| Cache Redis | 2,4× o throughput com HIT; banco fora do caminho | dado desatualizado por até 5 min se o banco mudar por fora da API; MISS mais caro que não ter cache; efeito manada na partida a frio, sem proteção pelo `sync` nesta versão; mais um serviço para operar (Redis fora = cerca de 1 s por requisição) |
+| JOIN FETCH | 4,1× o throughput do LAZY; JPQL portável | mais CPU na API (entidades gerenciadas); exige dois passos para não paginar em memória |
+| SQL nativo | +16% a 20% sobre o JOIN FETCH | mapeamento manual, sem validação na subida, preso ao dialeto PostgreSQL, só leitura |
+| EAGER | nenhum em lista | carrega dados que a tela não usa (grid 2,6× mais lento) em todas as consultas da entidade |
+| Índice composto | 6,8× o throughput | +3,1 MB (43% da tabela) e +33% de WAL por inserção; manutenção em toda escrita |
+
+### 6.2. Lei de Little e consistência entre repetições
+
+Em modelo fechado e saturado, latência média ≈ VUs / throughput. Os dados conferem com diferença de no máximo
+1,4 ms (LAZY com 200 VUs: 265,6 ms previstos, 264,25 ms medidos; [apêndice D](docs/apendice-experimentos.md#d-testes-de-carga-verificações-de-consistência)).
+Depois que um recurso satura, mais VUs só aumentam a fila: cada otimização eleva o patamar de throughput, e a
+latência sob carga é consequência dele.
+
+A variação do throughput entre as 3 repetições ((máximo − mínimo) / mediana) ficou em até 15% em 10 dos 11 alvos e
+chegou a 21% no sem cache com 50 VUs (uma repetição com 6.253 req/s, contra 7.390 e 7.804). As diferenças entre os
+alvos (1,7 a 7 vezes) são muito maiores, então as conclusões não dependem dessa variação.
+
+### 6.3. Limitações e ameaças à validade
+
+- **Tudo na mesma máquina:** k6, API, PostgreSQL e Redis num notebook com CPU móvel de 15 W, sujeita a variação de
+  frequência por temperatura. O k6 chegou a usar cerca de 4 núcleos, e IDE, navegador e um SQL Server continuaram
+  abertos (registrados em `ambiente.txt`).
+- **Ordem e temperatura:** a partida a frio superou o HIT na bateria principal e ficou abaixo dele com as
+  condições intercaladas (seção 5.4). Diferenças de cerca de 10% entre alvos medidos em momentos diferentes não
+  devem ser interpretadas.
+- **Modelo fechado sem think time:** mede a capacidade máxima, não usuários reais, que fazem pausas.
+- **Pool fixo em 10 conexões:** vários resultados medem o pool; o tamanho não foi variado.
+- **Dados sintéticos:** datas e clientes sorteados de forma independente, o que espalha os pedidos de um cliente
+  pela tabela (afeta a escolha entre Index Scan e Bitmap). O acesso aos produtos é uniforme, sem os "produtos
+  populares" de um catálogo real.
+- **Instância única da API:** favorece o cache e esconde o custo de coordenar várias instâncias.
+- **A base cabe na memória:** todos os acessos do PostgreSQL foram `hit`, nenhum `read`. Em disco, o índice
+  ganharia mais e o Seq Scan custaria mais.
+- **Rodadas de 30 s, só de leitura:** não mostram efeitos de longo prazo nem a disputa entre leitura e escrita.
+
+## 7. Conclusão
+
+O **índice composto** foi a mudança que mais rendeu: quase 7 vezes o throughput, com um custo pequeno e medido (3,1
+MB e um terço a mais de WAL nas inserções), porque cortou o trabalho de cada consulta (26 páginas em vez de 907).
+Eliminar o **N+1** trocou 41 idas ao banco por 2 e multiplicou o throughput por mais de 4. O **cache** rendeu menos
+em proporção (2,4 vezes com HIT), mas foi a única técnica cujo ganho cresceu com a carga, porque tira as
+requisições da fila do pool.
+
+Três resultados ficaram abaixo do esperado: o EAGER em lista gerou o mesmo N+1 que o LAZY; o cache sem acerto foi
+mais lento que não ter cache; e o `@Cacheable(sync = true)` não protegeu contra o efeito manada nesta versão do
+Spring Data Redis. O gargalo também mudou de lugar a cada otimização (pool, CPU do banco, CPU da máquina).
+
+#### Como demonstrar, por meio de evidências, que uma mudança realmente melhorou o desempenho de um sistema?
+
+Pelo método aplicado aqui:
+- **identificar o problema com uma medida objetiva** (`X-SQL-Count`, plano de execução, blocos lidos);
+- **implementar a alternativa ao lado da original e provar que as duas devolvem o mesmo resultado** (JSON
+  idêntico, corpo do HIT igual byte a byte);
+- **medir as duas nas mesmas condições, com controles** (estado do cache conferido, índice alternado, JVM
+  aquecida, o estado `sem_final`);
+- **repetir e comparar a variação**, olhando média, p95 e p99;
+- **explicar o resultado com uma segunda evidência independente** (CPU, pool, `pg_stat_database`, Lei de Little).
+
+Uma melhoria só está demonstrada quando a diferença é maior que a variação entre repetições e existe um mecanismo
+medido que a explica. A checagem da partida a frio mostra o motivo: uma diferença de 12% que parecia real sumiu
+quando a ordem das rodadas foi controlada.
+
+**Ligação com as aulas.** O cache é a memoization aplicada a um serviço: chave → valor já calculado, reaproveitado
+enquanto válido. Eliminar o N+1 repete o salto do Fibonacci com memoization: o custo deixa de crescer com N (O(N)
+idas ao banco para O(1)). O EAGER e os "índices em toda coluna" são escolhas gulosas: parecem ótimas para uma
+consulta isolada e pioram o sistema como um todo.
+
+## 8. Como executar e reproduzir
+
+**Pré-requisitos:** Java 21 e Docker com Compose v2; para os experimentos, `psql`, `jq`, k6 e Python 3. O Maven não
+precisa estar instalado (`./mvnw`).
+
+```bash
+cp .env.example .env              # troque todas as senhas "troque-esta-senha"
+docker compose up -d              # PostgreSQL (127.0.0.1:5433) e Redis (127.0.0.1:6379)
+docker compose ps                 # aguarde os dois ficarem "healthy"
+./mvnw spring-boot:run            # API em http://127.0.0.1:8080
+curl -s localhost:8080/actuator/health
+./mvnw clean verify               # 87 testes (1 pulado), cerca de 17 s; precisa do Compose no ar
+```
+
+**Experimentos** (gravam em `resultados/` e deixam a base no estado original):
+
+| Script | O que faz | Duração | Saída |
+|---|---|---|---|
+| `scripts/experimento-cache.sh` | experimento obrigatório e comparação com 1 usuário (API no ar com `CACHE_TTL_PRODUTOS=10s SQL_LOG_LEVEL=info`) | cerca de 1 min | `resultados/cache/` |
+| `scripts/experimento-persistencia.sh` | LAZY, EAGER, JOIN FETCH e nativa com 10, 100 e 1000 pedidos; SQLs gerados | cerca de 1 min | `resultados/persistencia/` |
+| `scripts/experimento-indice.sh` | sem → simples → composto → sem: planos, tempos, custos | cerca de 2 min | `resultados/indice/`, `resultados/explain/` |
+| `scripts/verificacao-estabilidade.sh` | 50 requisições simultâneas por endpoint do k6, antes da carga | menos de 1 min | `resultados/verificacao-estabilidade.txt` |
+| `scripts/rodar-cenarios.sh cache` (ou `persistencia`, `indice`, `todos`) | testes de carga com k6 | 50, 44 e 21 min | `resultados/carga/<cenário>/` |
+| `scripts/rodar-cenarios.sh checagem` | HIT × partida a frio intercalados, 100 VUs | cerca de 7 min | `resultados/carga/checagem-frio-hit/` |
+
+Os scripts que medem sobem a própria API na porta 18080 (`PORTA_EXPERIMENTO`). O de carga aceita `NIVEIS`,
+`DURACAO`, `AQUECIMENTO` e `REPETICOES`. Tabelas e gráficos:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements.txt
+.venv/bin/python scripts/gerar_graficos.py     # resultados/carga/resumo.{csv,md} e resultados/graficos/*.png
+```
+
+**Índice manual** (como admin; o usuário da aplicação não tem DDL):
+
+```bash
+set -a; . ./.env; set +a
+PGPASSWORD=$POSTGRES_ADMIN_PASSWORD psql -h 127.0.0.1 -p $POSTGRES_PORT -U $POSTGRES_ADMIN_USER \
+  -d $POSTGRES_DB -f db/indice/criar_indice.sql      # remover_indice.sql volta ao estado padrão
+```
+
+**Recriar a base do zero:** `docker compose down -v && docker compose up -d`. Os scripts de `db/init/` rodam de
+novo e geram dados idênticos; para conferir, `db/validacao_dados.sql` (saída esperada em
+[resultados/volume-dados.txt](resultados/volume-dados.txt)).
+
+## 9. Estrutura do repositório
+
+```
+src/main/java/br/uva/pedidos/   API: controller, service, repository, entity, dto, config, exception
+src/test/java/br/uva/pedidos/   87 testes funcionais (unitários e de integração)
+db/init/                        usuário da aplicação, schema e carga dos dados (executados pelo Compose)
+db/indice/                      criar e remover índices; consultas com EXPLAIN ANALYZE
+k6/                             cenários de carga e configuração comum
+scripts/                        experimentos, orquestrador do k6 e geração de gráficos
+resultados/                     saídas brutas de todos os experimentos (evidências)
+resultados/carga/               132 rodadas do k6, resumo.md, resumo.csv, ambiente.txt e a checagem frio × HIT
+resultados/graficos/            gráficos gerados por scripts/gerar_graficos.py
+postman/                        coleção com 47 requisições
+docs/                           enunciado, referências das aulas, apêndices e checklist
+```

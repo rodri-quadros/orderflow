@@ -1,0 +1,3 @@
+{"cenario": "persistencia", "alvo": "join-fetch", "vus": 100, "rep": 1, "k6_status": 0,
+ "banco": {"transacoes": 92424, "tup_returned": 10535411, "tup_fetched": 8687199, "blks_hit": 13493088, "blks_read": 0},
+ "cache": {"hit": 0, "miss": 0}, "idx_scan": 0, "redis_chaves": 0, "indices_pedido": "pedido_pkey"}

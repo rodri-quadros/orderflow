@@ -1,0 +1,3 @@
+{"cenario": "cache", "alvo": "sem-cache", "vus": 200, "rep": 1, "k6_status": 0,
+ "banco": {"transacoes": 181433, "tup_returned": 183234, "tup_fetched": 182314, "blks_hit": 545975, "blks_read": 0},
+ "cache": {"hit": 0, "miss": 0}, "idx_scan": 0, "redis_chaves": 901, "indices_pedido": "pedido_pkey"}

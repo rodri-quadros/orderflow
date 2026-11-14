@@ -117,7 +117,7 @@ Decisões da Etapa 4:
   evidências; saída em `resultados/persistencia/` (CSV, TXT, `sql-*.txt`). A porta 8081 está ocupada nesta máquina.
 - `StatementTimeoutTest`: `SHOW statement_timeout` = `10s` pela conexão da aplicação e `pg_sleep(11)` cancelado
   (deixa o `verify` cerca de 10 s mais lento).
-- Coleção Postman: 46 requisições (pastas Clientes, Produtos, Cache, Experimentos, Pedidos).
+- Coleção Postman: 47 requisições (pastas Clientes, Produtos, Cache, Experimentos, Pedidos).
 
 ## Índices (Etapa 7)
 - **Estado padrão do banco: sem `idx_pedido_cliente_data` e sem `idx_pedido_cliente`** (só `pedido_pkey` em `pedido`).
@@ -135,6 +135,50 @@ Decisões da Etapa 4:
   907 buffers); B, C e cliente 545 usam Bitmap Heap Scan + Sort mesmo com o composto (decisão de custo, explicada no README).
   Índice composto 3,1 MB (43% da tabela), +33% de WAL na inserção; `idx_scan` +4 com 4 chamadas à API.
 - `X-SQL-Count` de `/api/clientes/{id}/pedidos` é 1 (2 só quando a página vem vazia: confere a existência do cliente).
+
+## Testes (Etapa 8)
+- `./mvnw clean verify` → 87 testes (1 pulado), ~17 s. **A camada 2 precisa do Compose no ar** (PostgreSQL e Redis reais;
+  sem Testcontainers). Teste lento (`pg_sleep(11)`) só com `-Dtestes.lentos=true` (`@EnabledIfSystemProperty`).
+- Camada 1 (`test/.../entity`, `.../service`): JUnit 6 + AssertJ + Mockito, sem Spring. Camada 2 (`test/.../controller`):
+  `@SpringBootTest` + `@AutoConfigureMockMvc` (Boot 4: `org.springframework.boot.webmvc.test.autoconfigure`), base
+  `TesteIntegracao` com helpers (`get/post/put/patch`, `sqlCount`, `assertSemDadosInternos`, `pedidoJson`, `item`).
+- **Ids de teste só em `test/.../DadosTeste.java`**: clientes 1 (225 pedidos) e 545 (9); produtos ativos 10 (1419.87) e
+  20 (1236.44), inativo 5; produto 40 reservado ao cache; pedidos 3 (PENDENTE) e 1 (APROVADO); inexistente 999999.
+- Escrita: `@Transactional` (rollback). Cache: sem transação (evict após commit), restaura em `@AfterEach`.
+- `scripts/verificacao-estabilidade.sh`: 50 requisições simultâneas por endpoint do k6, sobe a própria API (18080).
+  Mostrou cache stampede: 50 MISS simultâneos com cache vazio (`@Cacheable` sem `sync`).
+- `docs/checklist-requisitos.md`: requisito do enunciado → evidência → status (pendências das Etapas 9–11).
+
+## Testes de carga (Etapa 9)
+- k6 v2.4.0 nativo (`/usr/bin/k6`, apt). Scripts em `k6/` (`lib/config.js`, `cache.js`, `persistencia.js`, `indice.js`;
+  `k6/dados/produtos-ativos.json` = 901 ids). `constant-vus`, sem think time, `discardResponseBodies`.
+- Rodar: `scripts/rodar-cenarios.sh [cache|persistencia|indice|todos]` (~50 + ~46 + ~23 min; rodar em blocos).
+  Variáveis: `NIVEIS`, `DURACAO`, `AQUECIMENTO`, `REPETICOES`, `AQUECIMENTO_INICIAL`, `PORTA_EXPERIMENTO` (18080), `DIR_SAIDA`.
+  Sobe a própria API (jar). Saída: `resultados/carga/<cenario>/<alvo>/vus<N>_rep<R>{.json,_amostras.csv,_metricas.json}`.
+- Gráficos: `python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements.txt && .venv/bin/python scripts/gerar_graficos.py`
+  → `resultados/carga/resumo.{csv,md}` e `resultados/graficos/*.png`. Nenhum número digitado à mão.
+- `GET /api/produtos/{id}/com-cache-sync` (`@Cacheable(sync = true)`): no Spring Data Redis 4.1 com writer sem trava,
+  **sync não sincroniza** (conferido no bytecode: sem monitor nem lock); só `enableLocking()` trava, e a trava é
+  distribuída (`produtos~lock`) e vale para o cache inteiro. Mantido como achado.
+- Estatísticas do PostgreSQL publicadas com atraso de até 10 s: o script espera 11 s após cada rodada; deltas do banco
+  analisados por transação.
+
+## Relatório e estado final (Etapa 10)
+- **Todas as etapas técnicas concluídas**; falta só a Etapa 11 (vídeo de até 7 min, commit e entrega).
+- `README.md` = relatório da seção 7.2, nas seções 1–7 do enunciado + 8 (reproduzir) + 9 (estrutura); ~890 linhas,
+  ~20 min de leitura. Linha `**Integrantes:** <preencher>` no cabeçalho, para o usuário completar.
+- Detalhes longos fora do README: `docs/apendice-experimentos.md` (passo a passo do cache, tabela completa da
+  Etapa 6, os 32 planos, Lei de Little, checagem frio × HIT, testes por classe) e `docs/decisoes-tecnicas.md`
+  (decisões com motivo). `resultados/carga/analise-preliminar.md` é histórico da Etapa 9.
+- `docs/checklist-requisitos.md`: requisito → seção do README → evidência.
+- `scripts/conferir_numeros.py [--prosa] [arquivos]`: confere se cada número das tabelas existe em `resultados/`
+  (formato brasileiro, arredondamento pelas casas exibidas); razões "×"/"vezes" saem como "derivado" para
+  conferência manual. Rodar depois de qualquer mudança de número no README.
+- `scripts/rodar-cenarios.sh checagem` (~7 min): HIT e partida a frio intercalados, 100 VUs →
+  `resultados/carga/checagem-frio-hit/` (fora do glob do resumo principal). Resultado: HIT 14.618 × frio
+  13.742 req/s; a vantagem do frio na bateria principal era efeito de ordem/temperatura.
+- Ao mudar números: copiar de `resultados/` (nunca digitar), regenerar com `gerar_graficos.py` e rodar o conferidor.
+- Mermaid do README revisado à mão (renderizar com `mermaid-cli` exigiria baixar pacote e rodar o Chrome).
 
 ## Divergências deliberadas em relação às aulas
 - Aula: `buscarProduto` é o método com `@Cacheable` e `invalidarCache(id)` é um método separado com `@CacheEvict`.

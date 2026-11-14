@@ -1,0 +1,3 @@
+{"cenario": "cache", "alvo": "frio-com-cache", "vus": 50, "rep": 1, "k6_status": 0,
+ "banco": {"transacoes": 963, "tup_returned": 2534, "tup_fetched": 1617, "blks_hit": 4124, "blks_read": 0},
+ "cache": {"hit": 575473, "miss": 930}, "idx_scan": 0, "redis_chaves": 901, "indices_pedido": "pedido_pkey"}

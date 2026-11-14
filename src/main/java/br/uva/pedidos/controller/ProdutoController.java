@@ -47,6 +47,11 @@ public class ProdutoController {
         return produtoService.buscarProdutoComCache(id);
     }
 
+    @GetMapping("/{id}/com-cache-sync")
+    public ProdutoDTO buscarComCacheSync(@PathVariable Long id) {
+        return produtoService.buscarProdutoComCacheSync(id);
+    }
+
     @PutMapping("/{id}")
     public ProdutoDTO atualizar(@PathVariable Long id, @Valid @RequestBody ProdutoRequest request) {
         return produtoService.atualizar(id, request);

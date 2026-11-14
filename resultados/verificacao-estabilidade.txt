@@ -1,0 +1,18 @@
+=== Verificação de estabilidade — 2026-11-13 22:43:28
+50 requisições disparadas ao mesmo tempo (xargs -P 50) por endpoint; pool Hikari de 10 conexões.
+
+endpoint                                         HTTP 200    erros   soma SQL  maior tempo
+/api/produtos/10/sem-cache                             50        0         50   0.209346 s
+/api/produtos/10/com-cache                             50        0         50   0.195235 s
+/api/clientes/1/pedidos?page=0&size=20                 50        0         50   0.203449 s
+/api/experimentos/pedidos/lazy?limite=10               50        0       1050   0.260740 s
+/api/experimentos/pedidos/eager?limite=10              50        0       1050   0.238701 s
+/api/experimentos/pedidos/join-fetch?limite=10         50        0        100   0.121071 s
+/api/experimentos/pedidos/nativa?limite=10             50        0         50   0.109222 s
+
+Timeouts do pool Hikari no log: 0
+Linhas ERROR no log da API: 0
+Health no fim: UP
+Chaves no Redis após o teste: 1 (removidas em seguida)
+
+=== Resultado: estável (0 erros)

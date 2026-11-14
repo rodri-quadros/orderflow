@@ -1,0 +1,57 @@
+=== 2026-11-13 23:16:16 — cenário: cache | níveis: 10 50 100 200 | duração 30s | aquecimento 10s | repetições 3
+SO: Ubuntu 24.04.5 LTS | kernel 6.17.0-14-generic
+CPU: 12th Gen Intel(R) Core(TM) i5-1235U | 12 CPUs lógicas
+RAM: 15Gi total, 3.8Gi disponível
+Carga média (1/5/15 min): 3.67 4.80 3.31
+Java: openjdk version "21.0.13.0.3" 2026-10-24 | Spring Boot 4.1.2
+PostgreSQL: 17.12 | Redis: 8.10.3 | k6: k6 v2.4.0 (commit/dd9395906d, go1.26.11, linux/amd64)
+Pool Hikari: 10 conexões | connection-timeout 5 s | statement_timeout 10 s
+Base: 100000 pedidos, 299702 itens, 10000 clientes, 1000 produtos
+k6, API, PostgreSQL e Redis na mesma máquina. Processos com mais CPU e memória no início do bloco:
+  %CPU %MEM   RSS COMMAND
+  26.8  1.0 164088 gnome-shell
+  17.8  0.9 147248 code
+   7.7  2.4 392388 code
+   3.7  2.7 433508 chrome
+   3.6  3.9 633000 claude-desktop
+   3.5  3.1 508800 chrome
+   2.7  3.0 491992 code
+
+=== 2026-11-14 00:07:47 — cenário: persistencia | níveis: 10 50 100 200 | duração 30s | aquecimento 10s | repetições 3
+SO: Ubuntu 24.04.5 LTS | kernel 6.17.0-14-generic
+CPU: 12th Gen Intel(R) Core(TM) i5-1235U | 12 CPUs lógicas
+RAM: 15Gi total, 3.4Gi disponível
+Carga média (1/5/15 min): 9.83 22.28 22.99
+Java: openjdk version "21.0.13.0.3" 2026-10-24 | Spring Boot 4.1.2
+PostgreSQL: 17.12 | Redis: 8.10.3 | k6: k6 v2.4.0 (commit/dd9395906d, go1.26.11, linux/amd64)
+Pool Hikari: 10 conexões | connection-timeout 5 s | statement_timeout 10 s
+Base: 100000 pedidos, 299702 itens, 10000 clientes, 1000 produtos
+k6, API, PostgreSQL e Redis na mesma máquina. Processos com mais CPU e memória no início do bloco:
+  %CPU %MEM   RSS COMMAND
+  73.0  2.9 478452 chrome
+  25.7  1.1 177852 gnome-shell
+  21.7  0.0  8068 docker-proxy
+  13.8  0.8 138568 code
+  10.5  0.0  5272 docker-proxy
+   6.1  0.0 10768 redis-server
+   6.1  2.4 386060 code
+
+=== 2026-11-14 00:52:25 — cenário: indice | níveis: 10 50 100 200 | duração 30s | aquecimento 10s | repetições 3
+SO: Ubuntu 24.04.5 LTS | kernel 6.17.0-14-generic
+CPU: 12th Gen Intel(R) Core(TM) i5-1235U | 12 CPUs lógicas
+RAM: 15Gi total, 3.9Gi disponível
+Carga média (1/5/15 min): 9.21 13.20 14.53
+Java: openjdk version "21.0.13.0.3" 2026-10-24 | Spring Boot 4.1.2
+PostgreSQL: 17.12 | Redis: 8.10.3 | k6: k6 v2.4.0 (commit/dd9395906d, go1.26.11, linux/amd64)
+Pool Hikari: 10 conexões | connection-timeout 5 s | statement_timeout 10 s
+Base: 100000 pedidos, 299702 itens, 10000 clientes, 1000 produtos
+k6, API, PostgreSQL e Redis na mesma máquina. Processos com mais CPU e memória no início do bloco:
+  %CPU %MEM   RSS COMMAND
+  47.8  0.0  8332 docker-proxy
+  28.4  1.0 169736 gnome-shell
+  11.4  0.8 134704 code
+   7.6  0.0  5344 docker-proxy
+   5.1  2.0 331280 code
+   4.8  1.4 229656 chrome
+   4.6  0.0     0 kauditd
+

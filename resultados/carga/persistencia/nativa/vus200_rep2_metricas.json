@@ -1,0 +1,3 @@
+{"cenario": "persistencia", "alvo": "nativa", "vus": 200, "rep": 2, "k6_status": 0,
+ "banco": {"transacoes": 105124, "tup_returned": 10302271, "tup_fetched": 10091137, "blks_hit": 16713633, "blks_read": 0},
+ "cache": {"hit": 0, "miss": 0}, "idx_scan": 0, "redis_chaves": 0, "indices_pedido": "pedido_pkey"}

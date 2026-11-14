@@ -44,6 +44,17 @@ public class ProdutoService {
         return ProdutoDTO.de(produtoRepository.save(produto));
     }
 
+    // Variante com sync = true, para estudar o efeito manada (vários MISS simultâneos da mesma chave).
+    // O Spring trata sync como dica e delega ao provedor: no Spring Data Redis 4.1, com o cache writer sem
+    // trava (configuração atual), o RedisCache não sincroniza nada; só um writer com enableLocking() serializa,
+    // e a trava dele é distribuída (chave produtos~lock no Redis) e vale para o cache inteiro, não por chave.
+    @Cacheable(value = "produtos", key = "#id", sync = true)
+    @Transactional(readOnly = true)
+    public ProdutoDTO buscarProdutoComCacheSync(Long id) {
+        return produtoRepository.buscarDTO(id)
+            .orElseThrow(() -> naoEncontrado(id));
+    }
+
     // Evict em vez de @CachePut: o próximo GET recarrega do banco, e uma escrita que falhe
     // não deixa no cache um valor que não existe no banco.
     @CacheEvict(value = "produtos", key = "#id")
